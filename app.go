@@ -134,8 +134,7 @@ func (a *App) StartShareServer(folderPath string, port int) (models.ShareServerI
 		a.st.SetServerStopped()
 		return models.ShareServerInfo{}, apperr.Other("%v", err)
 	}
-	a.st.SetServerRunning()
-	a.st.SetShareInfo(info)
+	a.st.SetServerRunningWithInfo(info)
 	slog.Info("共享服务器已启动", "ips", info.IPs, "port", info.Port)
 	return *info, nil
 }

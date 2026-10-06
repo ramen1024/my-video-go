@@ -72,7 +72,13 @@ func (s *AppState) Videos() *VideoList {
 }
 
 // SetVideos 原子替换列表，ETag 随之重算。
+//
+// nil 会被归一化为空切片：扫描零匹配时切片保持 nil，而 nil 经 JSON 序列化
+// 是 null，前端对响应直接 .map 会抛 TypeError（桌面绑定与 /videos 都受影响）。
 func (s *AppState) SetVideos(videos []models.VideoFile) {
+	if videos == nil {
+		videos = []models.VideoFile{}
+	}
 	s.videos.Store(&VideoList{Videos: videos, ETag: models.ComputeETag(videos)})
 }
 
@@ -161,12 +167,16 @@ func (s *AppState) StartServerStarting() error {
 	return nil
 }
 
-func (s *AppState) SetServerRunning() {
+// SetServerRunningWithInfo 将 Starting 置为 Running 并在同一临界区内记录
+// 对外信息。分两步写（先 Running 后 share_info）会留下中间窗口：webview
+// 恰在此刻重载会拿到 Running 但 IPs 空、Port 0 的状态。
+func (s *AppState) SetServerRunningWithInfo(info *models.ShareServerInfo) {
 	s.srvMu.Lock()
 	defer s.srvMu.Unlock()
 	if s.srvState == StateStarting {
 		s.srvState = StateRunning
 	}
+	s.shareInfo.Store(info)
 }
 
 // StartServerStopping 将 Running 置为 Stopping，返回 true 表示调用方应继续执行停止流程。
@@ -197,22 +207,19 @@ func (s *AppState) IsServerRunning() bool {
 	return s.srvState == StateRunning
 }
 
-// SetShareInfo 记录运行中服务器的对外信息。
-func (s *AppState) SetShareInfo(info *models.ShareServerInfo) {
-	s.shareInfo.Store(info)
-}
-
 // ShareStatus 汇总当前共享状态（webview 重载后恢复界面的唯一来源）。
+// running 与 shareInfo 在同一临界区内读取，保证二者一致。
 func (s *AppState) ShareStatus() models.ShareStatus {
 	s.srvMu.Lock()
 	running := s.srvState == StateRunning
+	info := s.shareInfo.Load()
 	s.srvMu.Unlock()
 
 	status := models.ShareStatus{Running: running, IPs: []string{}}
 	if !running {
 		return status
 	}
-	if info := s.shareInfo.Load(); info != nil {
+	if info != nil {
 		status.IPs = info.IPs
 		status.Port = info.Port
 	}

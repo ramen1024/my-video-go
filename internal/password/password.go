@@ -51,13 +51,22 @@ type config struct {
 
 // Manager 持有密码保护的全部可变状态，方法并发安全。
 type Manager struct {
-	mu       sync.Mutex
-	hash     string
-	enabled  bool
-	pepper   string
-	sessions map[string]time.Time      // token → 过期时刻
-	failed   map[string]*failedAttempt // ip → 失败记录
-	dir      string                    // 配置目录
+	// mu 保护密码配置与登录限流。Argon2id 验证（~19MB、几十毫秒）也在此
+	// 锁内执行——这是有意的：验证结果与失败计数必须绑成同一临界区，同一
+	// IP 的并发尝试才会被限流器按序计数；挪出锁外的话，并发请求会在计数
+	// 落地前全部通过检查，"3 次/30 秒"窗口即被突破。
+	mu      sync.Mutex
+	hash    string
+	enabled bool
+	pepper  string
+	failed  map[string]*failedAttempt // ip → 失败记录
+	dir     string                    // 配置目录
+
+	// sessMu 只保护 session 表：每个已认证请求（含视频流的每次 Range）都要
+	// 查它，必须与 mu 上的 Argon2id 验证隔离，否则刷 /auth 就能拖慢整站请求。
+	// 锁序恒为 mu → sessMu，不得反向。
+	sessMu   sync.RWMutex
+	sessions map[string]time.Time // token → 过期时刻
 
 	stopCleanup chan struct{}
 }
@@ -132,9 +141,34 @@ func (m *Manager) saveConfigLocked() {
 		fmt.Println("密码配置序列化失败:", err)
 		return
 	}
-	if err := os.WriteFile(m.configPath(), data, 0o600); err != nil {
+	// 必须原子替换：loadConfig 对损坏文件静默重置（= 静默禁用密码保护），
+	// 直接 WriteFile 在进程崩溃/断电时可能留下截断的 JSON 恰好触发该路径
+	if err := writeFileAtomic(m.configPath(), data); err != nil {
 		fmt.Println("密码配置保存失败:", err)
 	}
+}
+
+// writeFileAtomic 先写临时文件并落盘，再 rename 原子替换目标。
+func writeFileAtomic(path string, data []byte) error {
+	f, err := os.OpenFile(path+".tmp", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err = f.Write(data); err == nil {
+		err = f.Sync()
+	}
+	if closeErr := f.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		os.Remove(path + ".tmp")
+		return err
+	}
+	if err := os.Rename(path+".tmp", path); err != nil {
+		os.Remove(path + ".tmp")
+		return err
+	}
+	return nil
 }
 
 // ---- 状态查询与设置 ----
@@ -176,7 +210,7 @@ func (m *Manager) SetPassword(password string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.hash = hashPassword(password, m.pepper)
-	m.sessions = make(map[string]time.Time)
+	m.clearSessions()
 	m.saveConfigLocked()
 	return nil
 }
@@ -187,17 +221,17 @@ func (m *Manager) ResetPassword() error {
 	defer m.mu.Unlock()
 	m.hash = ""
 	m.enabled = false
-	m.sessions = make(map[string]time.Time)
+	m.clearSessions()
 	m.saveConfigLocked()
 	return nil
 }
 
 // GenerateRandomPassword 生成随机 4 位数字密码（含前导零）。
+// crypto/rand.Read 自 Go 1.24 起保证不返回错误；即便失败 b 保持零值，
+// 结果也只会是固定的 "0000"，由用户手动修改。
 func GenerateRandomPassword() string {
 	var b [2]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "0000" // crypto/rand 失败极罕见；退化为固定值由用户手动修改
-	}
+	_, _ = rand.Read(b[:])
 	n := (uint16(b[0])<<8 | uint16(b[1])) % 10000
 	return fmt.Sprintf("%04d", n)
 }
@@ -210,7 +244,7 @@ func (m *Manager) Authenticate(ip, password string) (string, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	m.cleanupExpiredSessionsLocked()
+	m.cleanupFailedLocked()
 
 	if m.hash == "" {
 		return "", apperr.PasswordError("未设置密码")
@@ -223,7 +257,7 @@ func (m *Manager) Authenticate(ip, password string) (string, error) {
 		return "", apperr.PasswordError("密码错误，请重试")
 	}
 	delete(m.failed, ip)
-	return m.createSessionLocked(), nil
+	return m.newSession(), nil
 }
 
 // checkRateLimitLocked 返回剩余锁定秒数（0 表示未锁定）。要求持有 m.mu。
@@ -255,16 +289,21 @@ func (m *Manager) recordFailedAttemptLocked(ip string) {
 	}
 }
 
-func (m *Manager) cleanupExpiredSessionsLocked() {
+func (m *Manager) cleanupSessionsLocked() {
 	now := time.Now()
 	for token, expiry := range m.sessions {
 		if expiry.Before(now) {
 			delete(m.sessions, token)
 		}
 	}
+}
+
+// cleanupFailedLocked 清理过期的失败记录：保留"锁定中"与"窗口内仍在累计"
+// 的记录，其余清除。要求持有 m.mu。
+func (m *Manager) cleanupFailedLocked() {
+	now := time.Now()
 	window := constants.LockDurationSecs * time.Second
 	for ip, a := range m.failed {
-		// 保留"锁定中"与"窗口内仍在累计"的记录，其余清除
 		if !a.lockedUntil.After(now) && now.Sub(a.lastFailed) >= window {
 			delete(m.failed, ip)
 		}
@@ -274,8 +313,11 @@ func (m *Manager) cleanupExpiredSessionsLocked() {
 // CleanupOnce 主动清理一次过期 session 与失败记录（/auth 请求入口会顺带调用）。
 func (m *Manager) CleanupOnce() {
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.cleanupExpiredSessionsLocked()
+	m.cleanupFailedLocked()
+	m.mu.Unlock()
+	m.sessMu.Lock()
+	m.cleanupSessionsLocked()
+	m.sessMu.Unlock()
 }
 
 func (m *Manager) cleanupLoop() {
@@ -286,33 +328,42 @@ func (m *Manager) cleanupLoop() {
 		case <-m.stopCleanup:
 			return
 		case <-ticker.C:
-			m.mu.Lock()
-			m.cleanupExpiredSessionsLocked()
-			m.mu.Unlock()
+			m.CleanupOnce()
 		}
 	}
 }
 
 // ---- Session ----
 
-// createSessionLocked 签发新 token。要求持有 m.mu。
-func (m *Manager) createSessionLocked() string {
+// newSession 签发新 token 并登记。要求持有 m.mu（内部取 sessMu 写锁，
+// 锁序恒为 m.mu → sessMu；在 m.mu 内登记保证与 SetPassword 的吊销串行）。
+func (m *Manager) newSession() string {
 	token := make([]byte, 32)
 	_, _ = rand.Read(token) // Go 1.24 起 crypto/rand.Read 保证不返回错误
 	t := hex.EncodeToString(token)
+	m.sessMu.Lock()
 	m.sessions[t] = time.Now().Add(constants.SessionDurationSecs * time.Second)
+	m.sessMu.Unlock()
 	return t
 }
 
+// clearSessions 吊销全部 session。要求持有 m.mu（改密/重置时调用）。
+func (m *Manager) clearSessions() {
+	m.sessMu.Lock()
+	m.sessions = make(map[string]time.Time)
+	m.sessMu.Unlock()
+}
+
 // CheckWebAuth 校验 Cookie 头中的 session token 是否有效。
+// 只取 sessMu 读锁：不与 Argon2id 验证（m.mu）互相阻塞。
 func (m *Manager) CheckWebAuth(cookieHeader string) bool {
 	token := extractSessionToken(cookieHeader)
 	if token == "" {
 		return false
 	}
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.sessMu.RLock()
 	expiry, ok := m.sessions[token]
+	m.sessMu.RUnlock()
 	return ok && expiry.After(time.Now())
 }
 

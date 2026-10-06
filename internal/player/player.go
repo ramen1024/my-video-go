@@ -8,12 +8,15 @@
 //   - 绑定 127.0.0.1 随机端口：不触发 Windows 防火墙提示，多实例互不冲突；
 //   - 与网页端共用 share.VideoHandler：路径校验/扩展名白名单/Range 行为一致。
 //
-// 威胁模型说明：服务器无鉴权（与运行中的共享服务器同级），但只监听回环
-// 地址，暴露面不大于共享功能本身。
+// 威胁模型说明：服务器无鉴权——webview 内的 <video> 请求不携带会话 cookie，
+// 无法简单复用网页端的登录态，因此共享密码对它不生效；本机其他进程/用户
+// 会话可以绕过密码经此拉流（Windows 上回环端口跨会话可连）。这是换取与
+// 网页端一致流式实现的有意取舍，且只监听 127.0.0.1，局域网其他设备不可达。
 package player
 
 import (
 	"context"
+	"my-video-go/internal/constants"
 	"my-video-go/internal/share"
 	"my-video-go/internal/state"
 	"net"
@@ -44,7 +47,11 @@ func (s *Server) Start() error {
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /video/", share.VideoHandler{State: s.st})
-	s.srv = &http.Server{Handler: mux}
+	s.srv = &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: constants.HTTPReadHeaderTimeout,
+		IdleTimeout:       constants.HTTPIdleTimeout,
+	}
 	go func() {
 		_ = s.srv.Serve(ln) // Stop 关闭 listener 后自然返回
 	}()

@@ -80,10 +80,13 @@ async function readJson(response: Response): Promise<Record<string, unknown>> {
 }
 
 /** 发起取 JSON 的请求，统一处理会话失效与错误码 */
-async function requestJson(url: string): Promise<{ response: Response; data: Record<string, unknown> }> {
+async function requestJson(
+  url: string,
+  init?: RequestInit,
+): Promise<{ response: Response; data: Record<string, unknown> }> {
   let response: Response;
   try {
-    response = await fetch(url, { cache: "no-store" });
+    response = await fetch(url, { cache: "no-store", ...init });
   } catch {
     throw new Error(REQUEST_HINT);
   }
@@ -138,7 +141,8 @@ async function loadVideosFromServer(): Promise<VideoItem[]> {
   const etag = response.headers.get("ETag");
   if (etag && etag === cachedEtag && cachedList.length > 0) return cachedList;
 
-  const summaries = (await response.json()) as VideoSummary[];
+  // 防御后端契约意外退回 null（nil 切片经 JSON 序列化的结果）
+  const summaries = ((await response.json()) as VideoSummary[] | null) ?? [];
   cachedEtag = etag;
   cachedList = summaries.map(toVideoItem);
   return cachedList;
@@ -146,7 +150,8 @@ async function loadVideosFromServer(): Promise<VideoItem[]> {
 
 /** 触发重新扫描并等待结果 */
 async function rescanOnServer(): Promise<{ videos: VideoItem[]; report: ScanReport }> {
-  const { data } = await requestJson(REFRESH_PATH);
+  // 用 POST：改状态的请求不该是 GET，避免浏览器预取/扫描器类行为误触发重扫
+  const { data } = await requestJson(REFRESH_PATH, { method: "POST" });
   if (!data.success) {
     throw new Error(typeof data.message === "string" ? data.message : "刷新失败");
   }

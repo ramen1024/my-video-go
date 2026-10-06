@@ -2,7 +2,7 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式。
 
-## [未发布]
+## [0.2.0] - 2026-10-07
 
 ### 修复
 
@@ -11,6 +11,32 @@
   内联播放改为请求 `internal/player` 的本机回环 HTTP 服务器（127.0.0.1 随机端口，
   与网页端共用同一套 `share.VideoHandler` 流式实现），前端经 `platform.init()`
   预取端口；回环服务器不可用时自动回退系统播放器
+- 扫描结果为空（目录零匹配）时前后端崩溃：Go 的 nil 切片经 JSON 序列化是
+  `null`，前端对响应直接 `.map` 会抛 TypeError。`state.SetVideos` 把 nil
+  归一化为空切片，`/videos` 亦从空切片起步，TS 侧另有 `?? []` 兜底
+- 共享服务器停止后实例字段未清理：停止后再启动，若全部候选端口绑定失败，
+  会沿用上次残留的 listener 误报"启动成功"（对外显示旧端口、实际无人监听）。
+  `Start` 改为成功后才提交实例字段，`Stop` 清空状态，`Serve` 异常退出记日志
+- 共享状态 Running 与 share_info 分两步写入留下的中间窗口（webview 恰在此刻
+  重载会拿到 Running 但 IPs 空、Port 0），合并为同一临界区写入
+
+### 变更
+
+- `/refresh` 由 GET 改为 POST：改状态的请求不使用 GET，避免浏览器预取/链接
+  扫描类行为误触发重扫（配合 Cookie 的 `SameSite=Strict`，跨站请求不会命中）
+- 生成随机密码移除 crypto/rand 失败时的 `"0000"` 回退（Go 1.24 起该调用
+  保证不返回错误）
+
+### 安全
+
+- `password_config.json` 改为原子写（临时文件 + Sync + rename）：原先直接
+  `WriteFile` 在进程崩溃/断电时可能留下截断 JSON，重启后触发"损坏静默重置"，
+  效果等于静默禁用密码保护
+- session 表拆分独立读写锁：每个已认证请求（含视频流的每次 Range 请求）的
+  会话校验不再与 Argon2id 验证（约 50ms）互相阻塞，刷 `/auth` 不再能拖慢
+  整站请求；验证与失败计数仍在同一临界区，限流语义不变
+- 共享服务器与回环播放服务器补上 `ReadHeaderTimeout`/`IdleTimeout`，
+  防慢连接长期占用 goroutine（有意不设 Read/WriteTimeout，避免掐断长视频流）
 
 ## [0.1.0] - 2026-10-07
 

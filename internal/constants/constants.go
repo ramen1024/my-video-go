@@ -50,6 +50,13 @@ const (
 	// ServerStopTimeoutSecs 是停止共享服务器时等待在途请求排空的总超时。
 	ServerStopTimeoutSecs = 5 * time.Second
 
+	// HTTPReadHeaderTimeout 是读取请求头的超时（防慢连接长期占用 goroutine）。
+	// 有意不设 Read/WriteTimeout：视频流式响应可能持续很久，不能被超时掐断。
+	HTTPReadHeaderTimeout = 10 * time.Second
+
+	// HTTPIdleTimeout 是 keep-alive 连接的空闲超时（share 与回环播放服务器共用）。
+	HTTPIdleTimeout = 120 * time.Second
+
 	// LogMaxFileSize 是日志文件轮转阈值（5 MiB，轮转为 .1 只保留一份）。
 	LogMaxFileSize int64 = 5 << 20
 )

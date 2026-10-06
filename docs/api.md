@@ -129,10 +129,11 @@ Session Cookie 属性：`HttpOnly; SameSite=Strict; Path=/`，有效期与服务
 服务器返回 `304 Not Modified`（响应体为空，同样带 `ETag`）。网页端即依赖这一机制
 避免重复传输与重渲染。
 
-### `GET /refresh`
+### `POST /refresh`
 
-触发后台重新扫描共享文件夹，并异步更新视频列表。这是一个**会改变服务端状态的 GET**
-（早期版本的接口形态）；由于 Cookie 为 `SameSite=Strict`，跨站请求不会携带会话。
+触发后台重新扫描共享文件夹，并异步更新视频列表。改状态的请求不使用 GET，
+以避免浏览器预取/链接扫描类行为误触发重扫；配合 Cookie 的 `SameSite=Strict`，
+跨站请求既不携带会话、也不会命中该端点。
 
 **响应示例（成功开始扫描，HTTP 202）：**
 

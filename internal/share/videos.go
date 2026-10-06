@@ -11,7 +11,9 @@ import (
 func (s *Server) handleVideos(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "must-revalidate")
 
-	var videos []models.VideoFile
+	// 从非 nil 空切片起步：nil 会被 json.Marshal 成 null，前端对响应直接
+	// .map 会抛 TypeError（从未扫描过与扫描零匹配都走这条路）
+	videos := []models.VideoFile{}
 	etag := `"` + models.ComputeETag(videos) + `"`
 	if list := s.st.Videos(); list != nil {
 		videos = list.Videos

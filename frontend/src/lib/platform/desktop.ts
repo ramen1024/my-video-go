@@ -80,7 +80,9 @@ export const desktop: Platform = {
     initPromise ??= bindings()
       .GetVideoServerPort()
       .then((port) => {
-        videoServerPort = port;
+        // 0 表示回环服务器启动失败：视为未取得，videoSrc 返回空串，
+        // 由 <video> 的 error 事件统一回退系统播放器
+        videoServerPort = port > 0 ? port : null;
       })
       .catch((e) => {
         console.error("获取回环播放服务器端口失败，内联播放将回退系统播放器:", e);
@@ -96,12 +98,12 @@ export const desktop: Platform = {
   async rescan(folder) {
     const report = await bindings().ScanVideos(folder);
     // 扫描结果已写入后端状态，再取一次保证与后端一致（含排序生效后的顺序）
-    const videos = await bindings().GetSharedVideos();
+    const videos = (await bindings().GetSharedVideos()) ?? [];
     return { videos: videos.map(toVideoItem), report };
   },
 
   async loadVideos() {
-    const videos = await bindings().GetSharedVideos();
+    const videos = (await bindings().GetSharedVideos()) ?? [];
     return videos.map(toVideoItem);
   },
 

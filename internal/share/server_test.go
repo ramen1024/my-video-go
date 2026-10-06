@@ -330,11 +330,26 @@ func TestVideoPathTraversal(t *testing.T) {
 	}
 }
 
+func TestVideosEmptyListReturnsArray(t *testing.T) {
+	s, _ := newTestServer(t, false)
+
+	// 从未扫描过时 /videos 必须返回 [] 而非 null：
+	// 前端对响应直接 .map，null 会抛 TypeError
+	w := doReq(s, "GET", "/videos", "", "", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("应 200: %d", w.Code)
+	}
+	body := strings.TrimSpace(w.Body.String())
+	if body != "[]" {
+		t.Fatalf("空列表应返回 [] 而非 null: %q", body)
+	}
+}
+
 func TestRefreshFlow(t *testing.T) {
 	s, st := newTestServer(t, false)
 
 	// 未设置文件夹 → 400
-	w := doReq(s, "GET", "/refresh", "", "", nil)
+	w := doReq(s, "POST", "/refresh", "", "", nil)
 	if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), "未设置共享文件夹") {
 		t.Fatalf("未设文件夹应 400: %d %s", w.Code, w.Body.String())
 	}
@@ -355,14 +370,14 @@ func TestRefreshFlow(t *testing.T) {
 	}
 
 	// 触发刷新 → 202
-	w = doReq(s, "GET", "/refresh", "", "", nil)
+	w = doReq(s, "POST", "/refresh", "", "", nil)
 	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), "刷新已开始") {
 		t.Fatalf("刷新应 202: %d %s", w.Code, w.Body.String())
 	}
 	waitRefreshDone(t, st)
 
 	// 冷却期内再次触发 → 429
-	w = doReq(s, "GET", "/refresh", "", "", nil)
+	w = doReq(s, "POST", "/refresh", "", "", nil)
 	if w.Code != http.StatusTooManyRequests || !strings.Contains(w.Body.String(), "刷新过于频繁") {
 		t.Fatalf("冷却期内应 429: %d %s", w.Code, w.Body.String())
 	}
@@ -385,7 +400,7 @@ func TestRefreshFlow(t *testing.T) {
 	// 移除过小文件后重新刷新 → 无跳过提示
 	os.Remove(filepath.Join(dir, "tiny.mp4"))
 	st.EndRefreshCooldown()
-	w = doReq(s, "GET", "/refresh", "", "", nil)
+	w = doReq(s, "POST", "/refresh", "", "", nil)
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("解除冷却后应 202: %d", w.Code)
 	}

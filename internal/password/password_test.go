@@ -240,9 +240,9 @@ func TestSessionExpiry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m.mu.Lock()
+	m.sessMu.Lock()
 	m.sessions[token] = time.Now().Add(-time.Second)
-	m.mu.Unlock()
+	m.sessMu.Unlock()
 	if m.CheckWebAuth("session_token=" + token) {
 		t.Fatal("过期 session 应无效")
 	}

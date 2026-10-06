@@ -11,7 +11,7 @@ func TestServerStateMachineHappyPath(t *testing.T) {
 	if err := st.StartServerStarting(); err != nil {
 		t.Fatalf("Stopped → Starting 应成功: %v", err)
 	}
-	st.SetServerRunning()
+	st.SetServerRunningWithInfo(nil)
 	if !st.IsServerRunning() {
 		t.Fatal("应处于 Running")
 	}
@@ -76,8 +76,7 @@ func TestShareStatus(t *testing.T) {
 	if st.ShareStatus().Running {
 		t.Fatal("Starting 阶段不应报告 Running")
 	}
-	st.SetServerRunning()
-	st.SetShareInfo(&models.ShareServerInfo{IPs: []string{"192.168.1.5"}, Port: 6008})
+	st.SetServerRunningWithInfo(&models.ShareServerInfo{IPs: []string{"192.168.1.5"}, Port: 6008})
 	status = st.ShareStatus()
 	if !status.Running || status.Port != 6008 || len(status.IPs) != 1 ||
 		status.IPs[0] != "192.168.1.5" || status.FolderPath != `D:\videos` {
@@ -161,5 +160,33 @@ func TestScanGuard(t *testing.T) {
 	st.EndScan()
 	if !st.BeginScan() {
 		t.Fatal("结束后应可重新获取")
+	}
+}
+
+// SetVideos(nil) 必须归一化为空切片：nil 经 JSON 序列化是 null，
+// 桌面绑定与 /videos 的前端消费方对响应直接 .map，null 会抛 TypeError。
+func TestSetVideosNormalizesNil(t *testing.T) {
+	st := New()
+	st.SetVideos(nil)
+	list := st.Videos()
+	if list == nil || list.Videos == nil || len(list.Videos) != 0 {
+		t.Fatalf("SetVideos(nil) 后应为非 nil 空切片: %+v", list)
+	}
+	if list.ETag != models.ComputeETag(nil) {
+		t.Fatal("空列表的 ETag 应与 ComputeETag(nil) 一致")
+	}
+}
+
+// Running 与 share_info 必须同时可见：分两步写的中间窗口会让 webview
+// 重载时拿到 Running 但 IPs 空、Port 0 的状态。
+func TestSetServerRunningWithInfoAtomic(t *testing.T) {
+	st := New()
+	if err := st.StartServerStarting(); err != nil {
+		t.Fatal(err)
+	}
+	st.SetServerRunningWithInfo(&models.ShareServerInfo{IPs: []string{"1.2.3.4"}, Port: 6008})
+	status := st.ShareStatus()
+	if !status.Running || status.Port != 6008 || len(status.IPs) != 1 {
+		t.Fatalf("Running 与 share_info 应同时生效: %+v", status)
 	}
 }

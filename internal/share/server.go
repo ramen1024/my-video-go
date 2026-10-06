@@ -10,8 +10,10 @@ package share
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
+	"log/slog"
 	"my-video-go/internal/constants"
 	"my-video-go/internal/localips"
 	"my-video-go/internal/models"
@@ -41,45 +43,65 @@ func New(st *state.AppState, pw *password.Manager, assets fs.FS) *Server {
 
 // Start 在指定端口监听并开始服务。端口被占用时自动向后尝试，
 // 最多 constants.MaxPortAttempts 个；全部失败返回最后一次错误。
+//
+// 监听结果只在成功后才提交到实例字段：若沿用上次运行残留的 listener 字段
+// 判断成败，"本次全部端口绑定失败"会被误判为成功（假 listener、旧端口、
+// 实际无人监听）。重复 Start 前必须先 Stop（由 AppState 状态机保证）。
 func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
-	s.ips = localips.Get()
+	ips := localips.Get()
 
 	var lastErr error
+	var ln net.Listener
+	var listenPort int
 	for attempt := 0; attempt < constants.MaxPortAttempts; attempt++ {
 		candidate := port + attempt
 		if candidate > 65535 {
 			break // 端口自增不得溢出 u16
 		}
-		ln, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", strconv.Itoa(candidate)))
+		lnTry, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", strconv.Itoa(candidate)))
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		s.ln = ln
-		s.port = candidate
+		ln = lnTry
+		listenPort = candidate
 		break
 	}
-	if s.ln == nil {
+	if ln == nil {
 		return nil, fmt.Errorf("服务器启动失败: %w", lastErr)
 	}
 
-	s.srv = &http.Server{Handler: s.Handler()}
+	s.ips = ips
+	s.ln = ln
+	s.port = listenPort
+	s.srv = &http.Server{
+		Handler:           s.Handler(),
+		ReadHeaderTimeout: constants.HTTPReadHeaderTimeout,
+		IdleTimeout:       constants.HTTPIdleTimeout,
+	}
 	go func() {
-		// Serve 在 Stop/Shudown 关闭 listener 后自然返回；错误无需上报
-		_ = s.srv.Serve(s.ln)
+		// Stop/Shudown 关闭 listener 后 Serve 返回 ErrServerClosed，属正常退出
+		if err := s.srv.Serve(s.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			slog.Warn("共享服务器异常退出", "err", err)
+		}
 	}()
 
 	return &models.ShareServerInfo{IPs: s.ips, Port: s.port}, nil
 }
 
 // Stop 优雅停止：等待在途请求排空，总超时 constants.ServerStopTimeoutSecs。
+// 实例字段一并清空，Port 归零，下次 Start 从干净状态开始。
 func (s *Server) Stop() error {
 	if s.srv == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), constants.ServerStopTimeoutSecs)
 	defer cancel()
-	return s.srv.Shutdown(ctx)
+	err := s.srv.Shutdown(ctx)
+	s.srv = nil
+	s.ln = nil
+	s.port = 0
+	return err
 }
 
 // Port 返回实际监听的端口（未启动时为 0）。
@@ -87,13 +109,17 @@ func (s *Server) Port() int { return s.port }
 
 // Handler 组装完整请求处理链：安全头 → Host 校验（防 DNS rebinding）→
 // 会话鉴权 → 路由。桌面端资产中间件只复用其中的路由部分。
+//
+// 注意 Host 白名单在 Start 时冻结（s.ips）：运行期间本机网络变化（DHCP
+// 换址、Wi-Fi 漫游）后，新 IP 上的请求会被 403，对外展示的 IP 同样过期，
+// 需停止并重新共享才能恢复。
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /auth", s.handleAuth)
 	mux.HandleFunc("GET /login", s.handleLogin)
 	mux.HandleFunc("GET /login.html", s.handleLogin)
 	mux.HandleFunc("GET /videos", s.handleVideos)
-	mux.HandleFunc("GET /refresh", s.handleRefresh)
+	mux.HandleFunc("POST /refresh", s.handleRefresh)
 	mux.HandleFunc("GET /refresh-status", s.handleRefreshStatus)
 	mux.Handle("GET /video/", VideoHandler{State: s.st})
 	mux.HandleFunc("GET /", s.handleIndex)

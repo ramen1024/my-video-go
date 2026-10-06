@@ -92,9 +92,9 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   `/video/*` 的白名单与 Content-Type 复用**同一个已小写化**的扩展名（`Movie.MP4`
   必须拿到 `video/mp4`）
 - `INLINE_PLAYABLE_EXTENSIONS`（format.ts，能否内联播放）是**启发式清单不是保证**：
-  不要改成 `canPlayType` 探测（假阴性），不要当硬保证；`+page` 的播放失败回退
-  （error 事件 → 系统播放器）不能删。它必须是 `videoTypes` 的子集
-  （`check-config-sync.mjs` 断言）
+  不要改成 `canPlayType` 探测（假阴性），不要当硬保证；`VideoPlayer` 的播放失败回退
+  （error 事件 → 系统播放器，页面侧在 App.svelte 的 handlePlaybackFailure）不能删。
+  它必须是 `videoTypes` 的子集（`check-config-sync.mjs` 断言）
 - **跨文件一致性由 `scripts/check-config-sync.mjs` 把守**（接入 pnpm check/build）：
   INLINE ⊆ VIDEO_TYPES、两清单无重复全小写、`DEFAULT_SHARE_PORT`/`MIN_VIDEO_FILE_SIZE_BYTES`
   与 Go 常量一致。同一个决策写两处时必须同步补断言
@@ -112,15 +112,21 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   停止 = `http.Server.Shutdown`（5 秒超时优雅排空）。**不要**绕过状态机直接起停服务器
   —— get_share_status 恢复界面依赖 Running 状态与 share_info
 - 端口被占用自动 +1 重试最多 5 个（`MaxPortAttempts`），不可越过 65535
-- `/refresh` 的 202 + 后台 goroutine + 5 秒冷却 + `refresh_result` 单值模型；
+- `/refresh`（**POST**，改状态的请求不用 GET）的 202 + 后台 goroutine + 5 秒冷却 +
+  `refresh_result` 单值模型；
   `/refresh-status` 以 `pending` 字段表示"尚无结果"，前端不解析 message 文案
 - 扫描入口统一走 `scanner.ScanAndStore`（ScanGuard 互斥，桌面扫描与网页刷新共用；
   并发时返回"扫描正在进行中，请稍后"）；取消后**不写入**列表并返回 ScanCancelled
 - `/videos` 响应不含绝对路径（模型里就没有 path 字段）；桌面端 `PlayVideo` 也只收
   relativePath，绝对路径解析在服务端完成（`share.ResolveVideoPath`，跟随符号链接但
   不得逃逸共享目录）
+- **Go 侧返回给前端的切片绝不能是 nil**：nil 经 JSON 序列化是 `null`，前端对响应
+  直接 `.map` 会抛 TypeError。`state.SetVideos` 已把 nil 归一化为空切片，`/videos`
+  的 handler 也从空切片起步；新增返回列表的绑定/端点时同样注意（TS 侧另有 `?? []`
+  兜底，但别依赖它）
 - 密码配置 JSON 损坏时静默重置为默认（丢密码、禁用保护），pepper 缺失则重新生成——
-  与 Tauri 版行为一致
+  与 Tauri 版行为一致；写入走 `writeFileAtomic`（tmp + rename + Sync），
+  **不要**改回直接 `os.WriteFile`（崩溃留下截断 JSON 恰好触发静默重置）
 - 密码锁定文案 `访问已锁定，请{n}秒后重试` 被登录页正则依赖（提取秒数做倒计时），
   不要改格式
 - `frontend/pnpm-workspace.yaml` 的 `allowBuilds: esbuild: true` 不能删：pnpm 11 只读
