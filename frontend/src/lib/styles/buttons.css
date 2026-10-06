@@ -1,0 +1,86 @@
+/**
+ * 按钮样式
+ *
+ * 统一使用单一主色调（蓝色）+ 中性/危险色，减少视觉噪音。
+ * 默认按钮为 subtle 样式，强调操作使用主色填充。
+ */
+
+/* 基础按钮样式 */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid transparent;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  background: var(--surface-hover);
+  color: var(--text-strong);
+  border-radius: var(--radius-sm);
+}
+
+.btn:hover:not(:disabled) {
+  background: var(--surface-raised);
+}
+
+.btn:active:not(:disabled) {
+  background: var(--surface-pressed);
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 主要操作按钮 */
+.btn-primary {
+  background: var(--accent-strong);
+  color: var(--white);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+}
+
+.btn-primary:active:not(:disabled) {
+  background: var(--accent-deep);
+}
+
+/* 次要操作按钮 */
+.btn-secondary {
+  background: var(--surface-raised);
+  border-color: var(--border-strong);
+  color: var(--text-strong);
+}
+
+.btn-secondary:hover:not(:disabled) {
+  background: var(--surface-pressed);
+}
+
+/* 共享按钮 */
+.btn-share {
+  background: var(--share);
+  color: var(--white);
+}
+
+.btn-share:hover:not(:disabled) {
+  background: var(--share-hover);
+}
+
+.btn-share:active:not(:disabled) {
+  background: var(--share-active);
+}
+
+/* 危险操作按钮 */
+.btn-danger {
+  background: var(--danger-soft);
+  border-color: var(--danger-border);
+  color: var(--danger);
+}
+
+.btn-danger:hover:not(:disabled) {
+  background: var(--danger-hover);
+}

@@ -1,0 +1,43 @@
+# Go
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+
+# Wails 构建产物（frontend/dist 由 pnpm build 生成，embed 前必须存在但不入库；
+# .gitkeep 例外——它是 fresh clone 时 go:embed 的占位，public/.gitkeep 会在
+# 每次构建后被 Vite 原样拷回，保证该文件恒存在且无 git 噪音）
+frontend/dist/*
+!frontend/dist/.gitkeep
+build/bin/
+
+# 前端
+node_modules/
+frontend/node_modules/
+
+# 日志与本地数据
+*.log
+dev.log
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 备份
+*.zip
+*.bak
+
+# Wails 绑定生成物（desktop.ts 用自声明的 AppBindings，不依赖生成代码）
+frontend/wailsjs/
+
+# Wails CLI 本机状态
+frontend/package.json.md5

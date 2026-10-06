@@ -1,0 +1,225 @@
+# HTTP API 文档
+
+本文档描述“视频扫描器”局域网共享功能对外暴露的 HTTP 端点。所有请求均由应用内嵌的
+Go `net/http` 服务器处理，默认监听由应用界面显示的本地 IP 与端口（端口被占用时从
+`DEFAULT_SHARE_PORT` 起自动向后尝试，最多 5 个）。
+
+网页端加载的正是桌面端同一份前端构建产物（`GET /` 返回的 `index.html` 及其
+`/assets/*` 静态资源），数据由下列 JSON 接口提供。
+
+## Host 校验
+
+**所有端点（包括 `POST /auth`）** 在路由分发前都先校验 `Host` 头：仅接受本机 IP（服务器
+启动时探测到的网卡地址，运行期间冻结）、`127.0.0.1`、`localhost`、`::1`（可带端口，IPv6
+字面量写作 `[::1]:6008`）。其他 Host 返回 `403 Invalid Host header`。
+
+这道校验用于阻断 DNS rebinding：恶意网页可以把域名解析到本机，但无法让浏览器把 Host
+伪装成本机 IP。
+
+## 认证说明
+
+当用户在设置中开启密码保护后，除以下端点外，其余所有请求都必须携带有效的
+`session_token` Cookie：
+
+- `POST /auth`
+- `GET /login`
+- `GET /login.html`
+
+未携带有效 Cookie 的请求会被 `302` 重定向到 `/login`。注意：**前端静态资源同样受保护**，
+未认证时请求 `/assets/...` 也会拿到指向 `/login` 的重定向而不是 JS 文件。
+
+已认证（或未启用密码保护）时访问 `/login` 会 `302` 重定向回 `/`。
+
+Session Cookie 属性：`HttpOnly; SameSite=Strict; Path=/`，有效期与服务器端 session 一致
+（1 小时）。
+
+---
+
+## 端点列表
+
+### `POST /auth`
+
+密码认证端点。认证成功后会设置 session cookie。
+
+**请求体：**
+
+```json
+{
+  "password": "1234"
+}
+```
+
+**响应示例（成功，HTTP 200）：**
+
+```json
+{
+  "success": true,
+  "token": "<session_token>"
+}
+```
+
+响应头包含 `Set-Cookie: session_token=<token>; Path=/; Max-Age=3600; HttpOnly; SameSite=Strict`。
+
+**其他情况：**
+
+| 状态码 | 场景 | 响应体 `message` |
+|--------|------|------------------|
+| 400 | 请求体不是合法 JSON | `无效的请求数据` |
+| 400 | `password` 为空 | `请输入密码` |
+| 401 | 密码错误 | `密码错误，请重试` |
+| 401 | 该 IP 已被锁定（连续 3 次失败后锁 30 秒） | `访问已锁定，请N秒后重试` |
+| 413 | 请求体超过 1KB | `请求体过大` |
+
+---
+
+### `GET /`
+
+返回前端单页应用（SPA）的 `index.html`，即 Vite 构建产物。
+
+**响应头：**
+
+- `Content-Type: text/html; charset=utf-8`
+- `Cache-Control: no-store`
+- `Content-Security-Policy`：`script-src 'self'`（产物没有内联脚本，无需 nonce）、
+  `style-src 'self' 'unsafe-inline'`（用于头部防闪屏的内联样式）、
+  `object-src 'none'; base-uri 'none'; frame-ancestors 'none'`；**不放行
+  `script-src 'unsafe-inline'`**
+
+若前端构建产物不可用（未执行 `pnpm build`），返回 `503`。
+
+### `GET /assets/*`、`GET /favicon.png`
+
+前端静态资源。缓存策略按 Vite 产物约定区分：
+
+| 路径 | `Cache-Control` |
+|------|-----------------|
+| `/assets/**`（内容哈希命名） | `public, max-age=31536000, immutable` |
+| 其他（favicon 等） | `public, max-age=3600` |
+
+未命中返回 `404`。路径中的 `..`、反斜杠与盘符前缀一律拒绝。
+
+### `GET /login`、`GET /login.html`
+
+返回登录页（自包含的单页 HTML，供未认证用户输入密码）。设计令牌与服务端其他界面
+同源（响应时注入 `theme.css`），内联脚本按每次请求随机的 CSP nonce 放行。
+
+### `GET /videos`
+
+返回当前共享文件夹中的视频列表 JSON。
+
+**响应示例（HTTP 200）：**
+
+```json
+[
+  {
+    "name": "demo.mp4",
+    "relative_path": "movies/demo.mp4",
+    "size": 123456789,
+    "modified": "2024-01-15 14:30:00",
+    "extension": "mp4"
+  }
+]
+```
+
+响应中**不包含**视频的绝对路径：绝对路径属于服务器实现细节（实际上模型中就没有该
+字段），局域网客户端的播放只需要 `relative_path`。
+
+响应头包含 `ETag`（基于全部视频的相对路径/大小/修改时间生成的全量指纹）与
+`Cache-Control: must-revalidate`。客户端可携带 `If-None-Match` 请求头，数据未变化时
+服务器返回 `304 Not Modified`（响应体为空，同样带 `ETag`）。网页端即依赖这一机制
+避免重复传输与重渲染。
+
+### `GET /refresh`
+
+触发后台重新扫描共享文件夹，并异步更新视频列表。这是一个**会改变服务端状态的 GET**
+（早期版本的接口形态）；由于 Cookie 为 `SameSite=Strict`，跨站请求不会携带会话。
+
+**响应示例（成功开始扫描，HTTP 202）：**
+
+```json
+{
+  "success": true,
+  "message": "刷新已开始"
+}
+```
+
+其他可能情况：
+
+- 已有刷新任务正在进行 → HTTP 429 `正在刷新中，请稍后`
+- 刷新过于频繁（5 秒冷却中） → HTTP 429 `刷新过于频繁，请稍后再试`
+- 未设置共享文件夹 → HTTP 400 `未设置共享文件夹`
+
+### `GET /refresh-status`
+
+查询最近一次刷新任务的结果。
+
+**响应示例（已产生结果，HTTP 200）：**
+
+```json
+{
+  "success": true,
+  "message": "视频列表已刷新",
+  "total": 18
+}
+```
+
+**当扫描跳过了过小的文件时，响应会额外带上计数并在 `message` 中说明：**
+
+```json
+{
+  "success": true,
+  "message": "视频列表已刷新；2 个文件因小于最小体积被跳过",
+  "total": 18,
+  "skipped_small_count": 2
+}
+```
+
+`skipped_small_count` 表示因小于 `MIN_VIDEO_FILE_SIZE_BYTES`（1 MiB）而被丢弃的文件数。服务端为节省带宽只下发**数量**、不逐文件下发明细（桌面端扫描会给出明细列表）；客户端据此提示用户"列表为什么比目录里的文件少"，不要静默忽略。
+
+**响应示例（无刷新记录，HTTP 200）：**
+
+```json
+{
+  "success": true,
+  "pending": true,
+  "message": "无刷新记录"
+}
+```
+
+客户端应以 `pending` 字段判断"本次刷新是否已有结果"（为 `true` 时继续轮询），不要依赖 `message` 文案。有结果时响应正文就是 `/refresh` 触发的那次扫描的结果对象，不含 `pending` 字段。
+
+### `GET /video/<relative_path>`
+
+视频文件流式服务，支持 HTTP `Range` 请求，可用于浏览器拖动进度条播放。
+Range 解析由 Go 标准库 `http.ServeContent` 完成（桌面端 webview 内的播放也走同一实现）。
+
+- `<relative_path>` 为视频文件相对于共享文件夹的路径，需要进行 URL 编码。
+- **路径必须位于共享文件夹内（解析符号链接后仍不得逃逸），且扩展名必须在受支持的视频
+  格式白名单内**（mp4 / m4v / mkv / webm / avi / mov / wmv / flv / mpg / mpeg，见
+  `internal/constants/constants.go` 的 `videoTypes`）。不满足时返回 `403`——共享文件夹中的
+  其他文件（如 `.txt`、`.db`、配置文件）不会被提供下载。
+- 请求头可包含 `Range: bytes=<start>-<end>`，支持以下形式：
+  - `bytes=0-499`：指定区间
+  - `bytes=100-`：从 100 到文件末尾
+  - `bytes=-500`：最后 500 字节（后缀范围）
+- 返回 `200 OK`（完整内容）、`206 Partial Content`（Range 请求）或 `416 Range Not Satisfiable`
+  （起始超出文件大小、起始大于结束等无法满足的情况，响应头包含
+  `Content-Range: bytes */<文件大小>`）。
+- 响应头包含 `Accept-Ranges: bytes` 与 `Content-Type`（根据**小写化后的**扩展名自动推断，
+  因此 `Movie.MP4` 也能拿到 `video/mp4`）。
+
+**示例请求：**
+
+```text
+GET /video/movies/demo.mp4 HTTP/1.1
+Range: bytes=0-1048575
+```
+
+---
+
+## 其他说明
+
+- 已知路径使用错误的 HTTP 方法（如 `POST /videos`）返回 `405 Method Not Allowed`。
+- 其他未匹配路径返回 `404 Not found`。
+- 所有响应都带 `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer` 与
+  `X-Frame-Options: DENY`。

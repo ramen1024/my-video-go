@@ -1,0 +1,18 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "my-video-go",
+  "outputfilename": "视频扫描器",
+  "frontend:install": "pnpm install",
+  "frontend:build": "pnpm build",
+  "frontend:dev:watcher": "pnpm dev",
+  "frontend:dev:serverUrl": "http://localhost:5173",
+  "author": {
+    "name": "YHY"
+  },
+  "info": {
+    "productName": "视频扫描器",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright © 2026",
+    "comments": "扫描本地视频文件夹并在局域网内共享播放"
+  }
+}

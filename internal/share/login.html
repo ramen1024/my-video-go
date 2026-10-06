@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>视频扫描器 - 密码验证</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        /*
+          设计令牌由服务端在响应时注入同一个 theme.css（见 server/handler.rs 的
+          render_login_page）。此处不再自带第二份 :root 定义：两套令牌一旦分叉，
+          改主题时必然漏掉其中一处。
+        */
+        /* {theme_tokens} */
+
+        body {
+            font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text);
+            overflow: hidden;
+            padding: 20px;
+        }
+
+        .login-card {
+            width: 100%;
+            max-width: 360px;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 32px 28px 28px;
+            box-shadow: var(--shadow-card);
+        }
+
+        .login-header {
+            text-align: center;
+            margin-bottom: 28px;
+        }
+
+        .lock-icon {
+            width: 52px;
+            height: 52px;
+            margin: 0 auto 14px;
+            color: var(--accent-light);
+        }
+
+        .login-title {
+            font-size: 20px;
+            font-weight: 700;
+            color: var(--text);
+            margin-bottom: 6px;
+        }
+
+        .login-subtitle {
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+
+        .pin-display {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .pin-box {
+            width: 56px;
+            height: 64px;
+            border-radius: 10px;
+            background: var(--surface-hover);
+            border: 1.5px solid var(--border-strong);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+            font-weight: 700;
+            color: transparent;
+            transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
+        }
+
+        .pin-box.has-digit {
+            color: var(--accent-light);
+            border-color: var(--accent-border);
+            background: var(--accent-soft);
+        }
+
+        .pin-box.has-digit.masked {
+            color: transparent;
+        }
+
+        .pin-box.has-digit.masked::after {
+            content: '';
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--accent-light);
+        }
+
+        .pin-box.error {
+            border-color: var(--danger-strong);
+            background: var(--danger-soft);
+            animation: shake 0.35s ease;
+        }
+
+        .pin-box.error::after {
+            background: var(--danger-strong);
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            25% { transform: translateX(-4px); }
+            75% { transform: translateX(4px); }
+        }
+
+        .banner {
+            text-align: center;
+            margin-bottom: 16px;
+            min-height: 0;
+            opacity: 0;
+            transform: translateY(-6px);
+            transition: opacity 0.2s ease, transform 0.2s ease;
+            pointer-events: none;
+        }
+
+        .banner.visible {
+            opacity: 1;
+            transform: translateY(0);
+            pointer-events: auto;
+        }
+
+        .banner-inner {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 14px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .banner.error .banner-inner {
+            background: var(--danger-soft);
+            border: 1px solid var(--danger-border);
+            color: var(--danger);
+        }
+
+        .banner.warning .banner-inner {
+            background: var(--warning-soft);
+            border: 1px solid var(--warning-border);
+            color: var(--warning);
+        }
+
+        .numpad-wrapper {
+            position: relative;
+        }
+
+        .numpad-overlay {
+            position: absolute;
+            inset: 0;
+            background: var(--scrim);
+            backdrop-filter: blur(2px);
+            border-radius: var(--radius-lg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 10;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .numpad-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .overlay-content {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .loading-dot {
+            display: inline-block;
+            width: 5px;
+            height: 5px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: dotBounce 1.2s ease-in-out infinite;
+        }
+
+        .loading-dot:nth-child(2) { animation-delay: 0.15s; }
+        .loading-dot:nth-child(3) { animation-delay: 0.3s; }
+
+        @keyframes dotBounce {
+            0%, 80%, 100% { opacity: 0.3; transform: translateY(0); }
+            40% { opacity: 1; transform: translateY(-4px); }
+        }
+
+        .numpad {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 10px;
+        }
+
+        .num-btn {
+            height: 56px;
+            border: 1px solid var(--surface-raised);
+            border-radius: 10px;
+            background: var(--surface-hover);
+            color: var(--text);
+            font-size: 20px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.12s ease, border-color 0.12s ease;
+            user-select: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+        .num-btn:hover {
+            background: var(--surface-raised);
+            border-color: var(--accent-soft-hover);
+        }
+
+        .num-btn:active {
+            background: var(--accent-soft);
+        }
+
+        .num-btn.action {
+            font-size: 14px;
+            color: var(--text-tertiary);
+        }
+
+        .num-btn.delete {
+            font-size: 18px;
+            color: var(--text-secondary);
+        }
+
+        .num-btn.delete:hover {
+            background: var(--danger-soft);
+            border-color: var(--danger-border);
+            color: var(--danger);
+        }
+
+        .success-overlay {
+            position: fixed;
+            inset: 0;
+            background: var(--scrim-strong);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.2s ease;
+        }
+
+        .success-overlay.active {
+            opacity: 1;
+            pointer-events: auto;
+        }
+
+        .success-check {
+            width: 56px;
+            height: 56px;
+            border-radius: 50%;
+            background: var(--success-soft);
+            border: 2px solid var(--success-border);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--success-light);
+            margin-bottom: 14px;
+        }
+
+        .success-check svg {
+            width: 28px;
+            height: 28px;
+        }
+
+        .success-text {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--success-light);
+        }
+
+        @media (max-width: 380px) {
+            .login-card { padding: 24px 20px 22px; }
+            .pin-box { width: 48px; height: 56px; font-size: 22px; }
+            .num-btn { height: 50px; font-size: 18px; }
+            .numpad { gap: 8px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="login-card">
+        <div class="login-header">
+            <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <div class="login-title">视频扫描器</div>
+            <div class="login-subtitle">请输入 4 位数字密码访问共享资源</div>
+        </div>
+
+        <div class="pin-display" id="pinDisplay">
+            <div class="pin-box" id="box0"></div>
+            <div class="pin-box" id="box1"></div>
+            <div class="pin-box" id="box2"></div>
+            <div class="pin-box" id="box3"></div>
+        </div>
+
+        <div class="banner" id="errorBanner">
+            <div class="banner-inner">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                <span id="errorMsg"></span>
+            </div>
+        </div>
+
+        <div class="banner warning" id="lockoutBanner">
+            <div class="banner-inner">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                <span id="lockoutMsg"></span>
+            </div>
+        </div>
+
+        <div class="numpad-wrapper">
+            <div class="numpad-overlay" id="numpadOverlay">
+                <div class="overlay-content">
+                    <span class="loading-dot"></span>
+                    <span class="loading-dot"></span>
+                    <span class="loading-dot"></span>
+                    <span>验证中</span>
+                </div>
+            </div>
+            <div class="numpad" id="numpad">
+                <button class="num-btn" data-key="1">1</button>
+                <button class="num-btn" data-key="2">2</button>
+                <button class="num-btn" data-key="3">3</button>
+                <button class="num-btn" data-key="4">4</button>
+                <button class="num-btn" data-key="5">5</button>
+                <button class="num-btn" data-key="6">6</button>
+                <button class="num-btn" data-key="7">7</button>
+                <button class="num-btn" data-key="8">8</button>
+                <button class="num-btn" data-key="9">9</button>
+                <button class="num-btn action" data-action="clear">清除</button>
+                <button class="num-btn" data-key="0">0</button>
+                <button class="num-btn delete" data-action="delete">⌫</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="success-overlay" id="successOverlay">
+        <div class="success-check">
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+        </div>
+        <div class="success-text">验证成功，正在跳转...</div>
+    </div>
+
+    <script>
+        let pin = '';
+        let isSubmitting = false;
+        let isLocked = false;
+        const MASK_DELAY = 600;
+
+        function updateBoxes() {
+            for (let i = 0; i < 4; i++) {
+                const box = document.getElementById('box' + i);
+                if (i < pin.length) {
+                    box.textContent = pin[i];
+                    box.className = 'pin-box has-digit';
+                    setTimeout(() => {
+                        if (box.textContent === pin[i]) {
+                            box.classList.add('masked');
+                            box.textContent = '';
+                        }
+                    }, MASK_DELAY);
+                } else {
+                    box.textContent = '';
+                    box.className = 'pin-box';
+                }
+            }
+        }
+
+        function showError(msg) {
+            const banner = document.getElementById('errorBanner');
+            document.getElementById('errorMsg').textContent = msg;
+            banner.classList.add('visible');
+            const boxes = document.querySelectorAll('.pin-box.has-digit');
+            boxes.forEach(b => b.classList.add('error'));
+            setTimeout(() => {
+                banner.classList.remove('visible');
+                boxes.forEach(b => b.classList.remove('error'));
+                pin = '';
+                updateBoxes();
+            }, 700);
+        }
+
+        function clearError() {
+            document.getElementById('errorBanner').classList.remove('visible');
+            document.getElementById('lockoutBanner').classList.remove('visible');
+        }
+
+        function showLoading(show) {
+            document.getElementById('numpadOverlay').classList.toggle('active', show);
+        }
+
+        function showSuccess() {
+            document.getElementById('successOverlay').classList.add('active');
+            setTimeout(() => { window.location.href = '/'; }, 700);
+        }
+
+        function inputDigit(d) {
+            if (isSubmitting || isLocked || pin.length >= 4) return;
+            clearError();
+            pin += d;
+            updateBoxes();
+            if (pin.length === 4) submitPin();
+        }
+
+        function deleteDigit() {
+            if (isSubmitting || isLocked || pin.length === 0) return;
+            clearError();
+            pin = pin.slice(0, -1);
+            updateBoxes();
+        }
+
+        function clearInput() {
+            if (isSubmitting || isLocked) return;
+            clearError();
+            pin = '';
+            updateBoxes();
+        }
+
+        async function submitPin() {
+            if (isSubmitting || isLocked) return;
+            isSubmitting = true;
+            showLoading(true);
+
+            try {
+                const response = await fetch('/auth', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: pin })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showLoading(false);
+                    showSuccess();
+                } else {
+                    showLoading(false);
+                    isSubmitting = false;
+                    if (data.message && data.message.includes('锁定')) {
+                        isLocked = true;
+                        const match = data.message.match(/(\d+)秒/);
+                        let totalSeconds = match ? parseInt(match[1], 10) : 30;
+                        const lockoutBanner = document.getElementById('lockoutBanner');
+                        const lockoutMsg = document.getElementById('lockoutMsg');
+
+                        function updateCountdown() {
+                            if (totalSeconds <= 0) {
+                                clearInterval(countdownTimer);
+                                isLocked = false;
+                                lockoutBanner.classList.remove('visible');
+                                return;
+                            }
+                            lockoutMsg.textContent = '连续失败次数过多，请 ' + totalSeconds + ' 秒后重试';
+                            lockoutBanner.classList.add('visible');
+                            totalSeconds--;
+                        }
+
+                        updateCountdown();
+                        const countdownTimer = setInterval(updateCountdown, 1000);
+                    } else {
+                        showError(data.message || '密码错误，请重试');
+                    }
+                }
+            } catch (error) {
+                showLoading(false);
+                isSubmitting = false;
+                showError('网络错误，请重试');
+            }
+        }
+
+        document.querySelectorAll('.num-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                if (this.dataset.key) inputDigit(this.dataset.key);
+                else if (this.dataset.action === 'delete') deleteDigit();
+                else if (this.dataset.action === 'clear') clearInput();
+            });
+        });
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key >= '0' && e.key <= '9') inputDigit(e.key);
+            else if (e.key === 'Backspace') deleteDigit();
+            else if (e.key === 'Escape') clearInput();
+        });
+    </script>
+</body>
+</html>

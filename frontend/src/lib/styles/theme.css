@@ -1,0 +1,86 @@
+/**
+ * 设计令牌（Design Tokens）
+ *
+ * 统一的颜色 / 圆角 / 字体 / 阴影体系，是本项目**唯一的颜色来源**：
+ * Svelte 组件直接 `import` 本文件，登录页（`src-tauri/src/login_template.html`）
+ * 由服务端在响应时把本文件注入它的 `theme_tokens` 占位符
+ * （见 `src-tauri/src/server/handler.rs` 的 `render_login_page`）。
+ *
+ * 原则：
+ * - 层级靠明度递进：bg → surface → surface-hover/raised/pressed
+ * - 边框统一低对比（6%~10% 白），主色边框用蓝色系
+ * - 文字分五级：text / strong / secondary / tertiary / faint
+ */
+:root {
+  /* 背景层级 */
+  --bg: #0f172a;
+  --surface: #111827;
+  --surface-hover: rgba(255, 255, 255, 0.04);
+  --surface-raised: rgba(255, 255, 255, 0.08);
+  --surface-pressed: rgba(255, 255, 255, 0.12);
+
+  /* 边框 */
+  --border: rgba(255, 255, 255, 0.06);
+  --border-faint: rgba(255, 255, 255, 0.04);
+  --border-strong: rgba(255, 255, 255, 0.1);
+
+  /* 文字 */
+  --text: #f8fafc;
+  --text-strong: rgba(255, 255, 255, 0.9);
+  --text-secondary: rgba(255, 255, 255, 0.6);
+  --text-tertiary: rgba(255, 255, 255, 0.4);
+  --text-faint: rgba(255, 255, 255, 0.35);
+
+  /* 主色（蓝） */
+  --accent: #3b82f6;
+  --accent-strong: #2563eb;
+  --accent-deep: #1d4ed8;
+  --accent-light: #60a5fa;
+  --accent-light-hover: #93c5fd;
+  --accent-soft: rgba(59, 130, 246, 0.12);
+  --accent-soft-hover: rgba(59, 130, 246, 0.25);
+  --accent-border: rgba(59, 130, 246, 0.3);
+  --accent-border-strong: rgba(59, 130, 246, 0.5);
+
+  /* 成功（绿） */
+  --success: #10b981;
+  --success-light: #34d399;
+  --success-soft: rgba(16, 185, 129, 0.12);
+  --success-border: rgba(16, 185, 129, 0.25);
+
+  /* 危险（红） */
+  --danger: #fca5a5;
+  --danger-strong: #ef4444;
+  --danger-soft: rgba(239, 68, 68, 0.1);
+  --danger-hover: rgba(239, 68, 68, 0.2);
+  --danger-border: rgba(239, 68, 68, 0.2);
+
+  /* 警告（黄） */
+  --warning: #fcd34d;
+  --warning-soft: rgba(251, 191, 36, 0.1);
+  --warning-border: rgba(251, 191, 36, 0.2);
+
+  /* 共享按钮（绿色实底） */
+  --share: #059669;
+  --share-hover: #10b981;
+  --share-active: #047857;
+
+  /* 特殊场景 */
+  --overlay: rgba(0, 0, 0, 0.85);
+  --scrim: rgba(15, 23, 42, 0.6);
+  --scrim-strong: rgba(15, 23, 42, 0.9);
+  --black: #000000;
+  --white: #ffffff;
+
+  /* 圆角 */
+  --radius-lg: 12px;
+  --radius-md: 10px;
+  --radius-sm: 8px;
+
+  /* 字体 */
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* 阴影 */
+  --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.6);
+  --shadow-card: 0 16px 48px rgba(0, 0, 0, 0.4);
+}

@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/png" href="/favicon.png" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>视频扫描器</title>
+    <!--
+      预涂底色 + 基础字体：防止 theme.css 加载完成前首帧闪白。
+      这是"禁止硬编码颜色"规则的有意例外（与原版 app.html 相同的做法），
+      底色必须与 src/lib/styles/theme.css 的 --bg (#0f172a) 保持一致，改主题需同步。
+      网页端 CSP 的 style-src 'unsafe-inline' 放行这段内联样式。
+    -->
+    <style>
+      body {
+        margin: 0;
+        background: #0f172a;
+        color: #fff;
+        overflow: hidden;
+        font-family: "Segoe UI", "Microsoft YaHei", -apple-system, sans-serif;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

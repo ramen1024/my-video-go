@@ -1,0 +1,4 @@
+# pnpm 11 起设置项只读本文件：不放行 esbuild 的构建脚本会导致
+# ERR_PNPM_IGNORED_BUILDS，并连带阻断 pnpm install / check / build。
+allowBuilds:
+  esbuild: true
