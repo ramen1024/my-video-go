@@ -53,8 +53,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - `password/` — Argon2id（m=19456,t=2,p=1）、4 位数字校验、session、IP 限流、
   `password_config.json` 持久化（0600）
 - `share/` — 内嵌 HTTP 服务器：`Handler()` 组装 安全头 → Host 校验 → 会话鉴权 → 路由；
-  `ResolveVideoPath` 是桌面端与网页端共用的路径解析/校验；`ServeVideo` 供 Wails
-  中间件调用
+  `ResolveVideoPath` 是桌面端与网页端共用的路径解析/校验；`VideoHandler` 是两端共用的
+  `/video/*` 流式播放处理（路径校验/白名单/Range）
+- `player/` — 桌面端内联播放专用的**回环 HTTP 服务器**（127.0.0.1 随机端口，
+  只路由 `/video/` 到 `share.VideoHandler`）
 - `state/` — AppState：atomic.Pointer 快照（列表+ETag、共享信息、刷新结果）、
   服务器状态机（Stopped→Starting→Running→Stopping）、扫描/刷新 CAS 守卫
 - `localips/` — 本机全局 IPv4 枚举（5 分钟缓存，过滤回环/链路本地）
@@ -96,9 +98,16 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - **跨文件一致性由 `scripts/check-config-sync.mjs` 把守**（接入 pnpm check/build）：
   INLINE ⊆ VIDEO_TYPES、两清单无重复全小写、`DEFAULT_SHARE_PORT`/`MIN_VIDEO_FILE_SIZE_BYTES`
   与 Go 常量一致。同一个决策写两处时必须同步补断言
-- 桌面端与网页端的 `videoSrc` 统一为 `/video/<encoded relativePath>`：桌面端靠
-  `main.go` 的 AssetServer Middleware 拦截 `/video/*` 调 `shareServer.ServeVideo`；
-  **改路径前缀时两处要一起改**。Range/416 由 `http.ServeContent` 保证，不要手写
+- **绝不能把大响应（视频）塞进 Wails 资产服务**：Wails v2 在 Windows 上把资产服务的
+  响应体**全量缓冲进内存**后才交给 WebView2（`pkg/assetserver/webview/
+  responsewriter_windows.go` 的 `body *bytes.Buffer` + `PutByteContent`），大视频会
+  无限转圈甚至内存耗尽（wails#5047，v2 无开关）。因此桌面端内联播放走
+  `internal/player` 的回环 HTTP 服务器（127.0.0.1 随机端口，`main.go` 在 `wails.Run`
+  之前启动，应用退出时停止）；前端经 `App.GetVideoServerPort` 预取端口（`platform.init()`，
+  `videoSrc` 是同步方法），拼出 `http://127.0.0.1:<port>/video/<encoded relativePath>`。
+  **不要**为了"统一路径"把这个改回 `/video/` 相对路径走资产服务中间件
+- 桌面端与网页端共用 `share.VideoHandler`（含 `ResolveVideoPath` 路径校验与扩展名
+  白名单）；Range/416 由 `http.ServeContent` 保证，不要手写
 - 服务器状态机与停止：`StartServerStarting`/`StartServerStopping` CAS 守卫状态转换；
   停止 = `http.Server.Shutdown`（5 秒超时优雅排空）。**不要**绕过状态机直接起停服务器
   —— get_share_status 恢复界面依赖 Running 状态与 share_info

@@ -4,6 +4,14 @@
 
 ## [未发布]
 
+### 修复
+
+- 桌面端播放大视频文件无限转圈：Wails v2 的资产服务在 Windows 上会把响应体
+  全量缓冲进内存后才交给 WebView2（wails#5047），视频类大文件不可用。桌面端
+  内联播放改为请求 `internal/player` 的本机回环 HTTP 服务器（127.0.0.1 随机端口，
+  与网页端共用同一套 `share.VideoHandler` 流式实现），前端经 `platform.init()`
+  预取端口；回环服务器不可用时自动回退系统播放器
+
 ## [0.1.0] - 2026-10-07
 
 首个版本：my-video-tauri（Tauri 2 + Rust 版）的同功能 Go 重写版。

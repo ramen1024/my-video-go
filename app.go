@@ -8,6 +8,7 @@ import (
 	"my-video-go/internal/constants"
 	"my-video-go/internal/models"
 	"my-video-go/internal/password"
+	"my-video-go/internal/player"
 	"my-video-go/internal/scanner"
 	"my-video-go/internal/share"
 	"my-video-go/internal/state"
@@ -20,10 +21,11 @@ import (
 // App 是绑定给前端的方法集。前端通过 window.go.main.App.<方法> 调用，
 // 错误以 err.Error() 字符串出现在 Promise reject 中。
 type App struct {
-	ctx   context.Context
-	st    *state.AppState
-	pw    *password.Manager
-	share *share.Server
+	ctx    context.Context
+	st     *state.AppState
+	pw     *password.Manager
+	share  *share.Server
+	player *player.Server
 }
 
 func NewApp(st *state.AppState, pw *password.Manager, shareServer *share.Server) *App {
@@ -35,12 +37,15 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// shutdown 在应用退出时尽力停止共享服务器，避免留下占用端口的残留进程。
+// shutdown 在应用退出时尽力停止共享与回环播放服务器，避免留下占用端口的残留进程。
 func (a *App) shutdown(ctx context.Context) {
 	if a.st.IsServerRunning() {
 		if err := a.share.Stop(); err != nil {
 			slog.Warn("退出时停止共享服务器失败", "err", err)
 		}
+	}
+	if err := a.player.Stop(); err != nil {
+		slog.Warn("退出时停止回环播放服务器失败", "err", err)
 	}
 }
 
@@ -67,6 +72,13 @@ func (a *App) GetSharedVideos() []models.VideoFile {
 // CancelScan 请求取消进行中的扫描；无扫描在途时为无害操作。
 func (a *App) CancelScan() {
 	a.st.CancelScan()
+}
+
+// GetVideoServerPort 返回桌面端回环播放服务器的端口（0 表示未启动，
+// 前端据此让内联播放走失败回退）。见 internal/player 包注释了解为什么
+// 不走 Wails 资产服务。
+func (a *App) GetVideoServerPort() int {
+	return a.player.Port()
 }
 
 // PlayVideo 用系统默认播放器打开共享目录内的视频。

@@ -3,6 +3,7 @@ package share
 import (
 	"errors"
 	"my-video-go/internal/constants"
+	"my-video-go/internal/state"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -19,25 +20,20 @@ var (
 	ErrResolveTarget = errors.New("resolve target")
 )
 
-// ServeVideo 供桌面端 AssetServer 中间件调用的公开入口（本地访问无需会话）。
-func (s *Server) ServeVideo(w http.ResponseWriter, r *http.Request) {
-	s.handleVideo(w, r)
+// VideoHandler 以共享目录为根提供 /video/* 流式播放，桌面端回环播放服务器
+// 与网页端 HTTP 服务器共用同一实例逻辑（路径校验/白名单/Range 完全一致）。
+type VideoHandler struct {
+	State *state.AppState
 }
 
-// handleVideo 提供视频文件的流式播放（桌面端资产中间件与网页端共用）。
-//
-// 相对路径从共享目录解析：Join + EvalSymlinks（与原版 canonicalize 语义一致，
-// 跟随符号链接）后校验必须仍在共享目录内；扩展名白名单与 Content-Type
-// 复用同一个已小写化的扩展名。Range/416/Content-Range 由
-// http.ServeContent（标准库）保证，不手写解析。
-func (s *Server) handleVideo(w http.ResponseWriter, r *http.Request) {
+func (h VideoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rel := strings.TrimPrefix(r.URL.Path, "/video/")
 	if rel == "" {
 		writeText(w, http.StatusBadRequest, "Invalid video path")
 		return
 	}
 
-	abs, err := ResolveVideoPath(s.st.FolderPath(), rel)
+	abs, err := ResolveVideoPath(h.State.FolderPath(), rel)
 	if err != nil {
 		if errors.Is(err, ErrTraversal) {
 			writeText(w, http.StatusForbidden, "Access denied: invalid path")

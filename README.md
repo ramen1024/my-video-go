@@ -72,8 +72,9 @@ docs/api.md                网页端 HTTP 接口契约
 
 设计要点（与 Tauri 版的差异）：
 
-- **相对路径贯穿前后端**：前端只拿 `relative_path`，桌面端播放走 Wails 资产服务
-  中间件、网页端走 HTTP 端点，两侧共用同一套路径校验 / 扩展名白名单 / Range 实现
+- **相对路径贯穿前后端**：前端只拿 `relative_path`，桌面端播放走本机回环 HTTP
+  服务器（127.0.0.1 随机端口，规避 Wails 资产服务全量缓冲响应的限制）、网页端走
+  HTTP 端点，两侧共用同一套路径校验 / 扩展名白名单 / Range 实现
 - `http.ServeContent`（标准库）处理 Range / 416 / Content-Range，`http.Server.Shutdown`
   优雅停止，没有手写的 worker 池与停止信号机制
 - 前端产物无内联脚本，浏览器端 CSP 用 `script-src 'self'` 即可，无需 nonce 注入

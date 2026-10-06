@@ -6,12 +6,11 @@ import (
 	"log/slog"
 	"my-video-go/internal/logging"
 	"my-video-go/internal/password"
+	"my-video-go/internal/player"
 	"my-video-go/internal/share"
 	"my-video-go/internal/state"
-	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -48,6 +47,16 @@ func main() {
 	shareServer := share.New(st, pw, dist)
 	app := NewApp(st, pw, shareServer)
 
+	// 桌面端内联播放走回环 HTTP 服务器：Wails 资产服务会把响应体全量缓冲进
+	// 内存再交给 WebView2，大视频会无限转圈（见 internal/player 包注释）。
+	// 必须在 wails.Run 之前启动，保证前端任何时刻都能拿到稳定端口。
+	playerServer := player.New(st)
+	if err := playerServer.Start(); err != nil {
+		// 回环监听失败极罕见；不阻断启动，内联播放会经 error 事件回退系统播放器
+		slog.Error("回环播放服务器启动失败，内联播放将回退系统播放器", "err", err)
+	}
+	app.player = playerServer
+
 	err = wails.Run(&options.App{
 		Title:            "视频扫描器",
 		Width:            1000,
@@ -57,17 +66,6 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 0x0f, G: 0x17, B: 0x2a, A: 255}, // theme.css 的 --bg，防首帧闪白
 		AssetServer: &assetserver.Options{
 			Assets: assets,
-			Middleware: func(next http.Handler) http.Handler {
-				// 桌面端内联播放：/video/* 从共享目录流式供出（与网页端同一套
-				// 解析/白名单/Range 代码），其余请求走内嵌前端产物
-				return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if strings.HasPrefix(r.URL.Path, "/video/") {
-						shareServer.ServeVideo(w, r)
-						return
-					}
-					next.ServeHTTP(w, r)
-				})
-			},
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,

@@ -95,7 +95,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /videos", s.handleVideos)
 	mux.HandleFunc("GET /refresh", s.handleRefresh)
 	mux.HandleFunc("GET /refresh-status", s.handleRefreshStatus)
-	mux.HandleFunc("GET /video/", s.handleVideo)
+	mux.Handle("GET /video/", VideoHandler{State: s.st})
 	mux.HandleFunc("GET /", s.handleIndex)
 
 	var h http.Handler = mux

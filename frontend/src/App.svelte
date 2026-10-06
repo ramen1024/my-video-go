@@ -208,6 +208,8 @@
   }
 
   onMount(async () => {
+    // 平台初始化（桌面端预取回环视频服务器端口，videoSrc 依赖它）
+    await platform.init();
     if (isDesktop) {
       await restoreBackendState();
       try {

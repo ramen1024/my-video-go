@@ -75,6 +75,14 @@ export interface Platform {
   pickFolder(): Promise<string | null>;
 
   /**
+   * 平台初始化（幂等），App 挂载时最先调用
+   *
+   * 桌面端借此预取回环视频服务器端口（videoSrc 是同步方法，端口必须提前就位）；
+   * 网页端为无操作。
+   */
+  init(): Promise<void>;
+
+  /**
    * 重新扫描共享目录
    *
    * 返回最新列表与本次扫描报告。报告用于解释"目录里明明有 N 个文件、列表里只有
@@ -109,9 +117,10 @@ export interface Platform {
   /**
    * 视频资源 URL
    *
-   * 桌面端与网页端**统一**为 `/video/<encoded relativePath>`：
-   * 桌面端由 Wails 资产服务的中间件拦截并从共享目录流式供出，
-   * 网页端由内嵌 HTTP 服务器提供，两侧走同一套路径校验与 Range 实现。
+   * 桌面端指向本机回环播放服务器（`http://127.0.0.1:<port>/video/...`）——
+   * Wails 资产服务会把响应体全量缓冲进内存，大视频会无限转圈，因此必须走
+   * 真 HTTP 服务器；网页端为 `/video/<encoded relativePath>`。两侧共用
+   * 同一套路径校验与 Range 实现（`share.VideoHandler`）。
    */
   videoSrc(video: VideoItem): string;
 

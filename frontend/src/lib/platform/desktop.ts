@@ -22,6 +22,7 @@ interface AppBindings {
   ScanVideos(folderPath: string): Promise<ScanReport>;
   GetSharedVideos(): Promise<VideoFile[]>;
   CancelScan(): Promise<void>;
+  GetVideoServerPort(): Promise<number>;
   PlayVideo(relativePath: string): Promise<void>;
   StartShareServer(folderPath: string, port: number): Promise<ShareServerInfo>;
   StopShareServer(): Promise<void>;
@@ -58,6 +59,14 @@ function toVideoItem(video: VideoFile): VideoItem {
   };
 }
 
+/**
+ * 回环视频服务器端口：init() 时预取一次（videoSrc 是同步方法，端口必须提前就位）。
+ * null 表示尚未取得（init 未完成或启动失败），videoSrc 返回空串，
+ * <video> 的 error 事件会让页面回退到系统播放器。
+ */
+let videoServerPort: number | null = null;
+let initPromise: Promise<void> | null = null;
+
 export const desktop: Platform = {
   kind: "desktop",
   canPickFolder: true,
@@ -65,6 +74,19 @@ export const desktop: Platform = {
   canCancelScan: true,
   canOpenWithSystemPlayer: true,
   listPollIntervalMs: null,
+
+  init() {
+    // 幂等：端口在应用生命周期内不变，取一次即可
+    initPromise ??= bindings()
+      .GetVideoServerPort()
+      .then((port) => {
+        videoServerPort = port;
+      })
+      .catch((e) => {
+        console.error("获取回环播放服务器端口失败，内联播放将回退系统播放器:", e);
+      });
+    return initPromise;
+  },
 
   async pickFolder() {
     const selected = await bindings().PickFolder();
@@ -94,8 +116,13 @@ export const desktop: Platform = {
   },
 
   videoSrc(video) {
-    // 桌面端由 Wails 资产服务的中间件拦截 /video/* 并从共享目录供流
-    return `/video/${encodeURIComponent(video.relativePath)}`;
+    if (videoServerPort === null) {
+      // init 未完成或回环服务器未启动：返回空串让 <video> 触发 error，
+      // 由页面统一回退到系统播放器（正常流程不会走到这里）
+      return "";
+    }
+    // 大文件必须走回环 HTTP 服务器流式播放，Wails 资产服务会全量缓冲
+    return `http://127.0.0.1:${videoServerPort}/video/${encodeURIComponent(video.relativePath)}`;
   },
 
   async openWithSystemPlayer(video) {

@@ -1,0 +1,70 @@
+// Package player 提供桌面端内联播放用的回环视频服务器。
+//
+// 为什么不走 Wails 资产服务：Wails v2 在 Windows 上会把资产服务的响应体
+// 完整缓冲进内存后才交给 WebView2（v2.16 pkg/assetserver/webview/
+// responsewriter_windows.go 的 PutByteContent），视频这类大文件会无限转圈
+// 甚至内存耗尽（见 wails#5047，v2 无开关可绕过）。因此桌面端播放改为请求
+// 本机回环地址上的真 HTTP 服务器：
+//   - 绑定 127.0.0.1 随机端口：不触发 Windows 防火墙提示，多实例互不冲突；
+//   - 与网页端共用 share.VideoHandler：路径校验/扩展名白名单/Range 行为一致。
+//
+// 威胁模型说明：服务器无鉴权（与运行中的共享服务器同级），但只监听回环
+// 地址，暴露面不大于共享功能本身。
+package player
+
+import (
+	"context"
+	"my-video-go/internal/share"
+	"my-video-go/internal/state"
+	"net"
+	"net/http"
+	"time"
+)
+
+// stopTimeout 是停止回环服务器时等待在途请求排空的超时。
+const stopTimeout = 2 * time.Second
+
+type Server struct {
+	st  *state.AppState
+	ln  net.Listener
+	srv *http.Server
+}
+
+func New(st *state.AppState) *Server {
+	return &Server{st: st}
+}
+
+// Start 在 127.0.0.1 的随机端口上开始服务。必须在读取 Port 之前调用。
+func (s *Server) Start() error {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return err
+	}
+	s.ln = ln
+
+	mux := http.NewServeMux()
+	mux.Handle("GET /video/", share.VideoHandler{State: s.st})
+	s.srv = &http.Server{Handler: mux}
+	go func() {
+		_ = s.srv.Serve(ln) // Stop 关闭 listener 后自然返回
+	}()
+	return nil
+}
+
+// Port 返回实际监听的端口；未启动或启动失败时为 0。
+func (s *Server) Port() int {
+	if s.ln == nil {
+		return 0
+	}
+	return s.ln.Addr().(*net.TCPAddr).Port
+}
+
+// Stop 优雅停止回环服务器（应用退出时调用）。
+func (s *Server) Stop() error {
+	if s.srv == nil {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
+	defer cancel()
+	return s.srv.Shutdown(ctx)
+}

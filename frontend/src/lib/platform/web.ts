@@ -197,6 +197,10 @@ export const web: Platform = {
     return null;
   },
 
+  async init() {
+    // 网页端无需初始化（videoSrc 的 /video/ 路径是自包含的）
+  },
+
   async rescan() {
     return await rescanOnServer();
   },
