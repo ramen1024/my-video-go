@@ -1,0 +1,65 @@
+name: Release
+
+# 推送 v* 标签时自动构建并发布 Release，产物为单文件绿色版 exe
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: true
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: pnpm install --frozen-lockfile
+
+      # 必须在 wails build 之前（go:embed all:frontend/dist 要求 dist 有产物）
+      - name: 前端构建
+        working-directory: frontend
+        run: pnpm build
+
+      - name: 安装 Wails CLI
+        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+
+      - name: wails build
+        run: |
+          $env:PATH += ";$(go env GOPATH)\bin"
+          wails build
+
+      # 产物文件名含中文（wails.json 的 outputfilename），附件统一为 ASCII 名
+      - name: 归一化产物文件名
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem "build/bin/*.exe" | Select-Object -First 1
+          $dest = "video-scanner-$($env:GITHUB_REF_NAME)-windows-amd64.exe"
+          Copy-Item $exe.FullName $dest
+          "ASSET=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME `
+            --title "视频扫描器 $env:GITHUB_REF_NAME" `
+            --generate-notes `
+            $env:ASSET

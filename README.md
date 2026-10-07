@@ -3,8 +3,14 @@
 扫描本地视频文件夹，在桌面端直接播放，或一键开启局域网共享，让手机 / 平板 / 电视
 浏览器扫码观看。Go + Wails v2 + Svelte 5 实现，单一二进制、无运行时依赖。
 
-这是 [my-video-tauri](https://github.com/)（Tauri 2 + Rust 版）的同功能重写版：
-功能对等，工程实现按 Go 的习惯重新设计。遵循 GPL-3.0 许可证开源。
+这是 [my-video-tauri](https://github.com/ramen1024/my-video-tauri)（Tauri 2 + Rust 版）
+的同功能重写版：功能对等，工程实现按 Go 的习惯重新设计。遵循 GPL-3.0 许可证开源。
+
+## 下载
+
+从 [Releases](https://github.com/ramen1024/my-video-go/releases) 下载最新的
+`video-scanner-*-windows-amd64.exe`，单文件绿色版，无需安装（WebView2 运行时
+Windows 11 自带）。也可以按下面的说明自行构建。
 
 ## 功能
 

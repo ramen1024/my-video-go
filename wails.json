@@ -7,7 +7,7 @@
   "frontend:dev:watcher": "pnpm dev",
   "frontend:dev:serverUrl": "http://localhost:5173",
   "author": {
-    "name": "YHY"
+    "name": "ramen1024"
   },
   "info": {
     "productName": "视频扫描器",
