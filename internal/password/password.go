@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/crypto/argon2"
@@ -55,9 +56,13 @@ type Manager struct {
 	// 锁内执行——这是有意的：验证结果与失败计数必须绑成同一临界区，同一
 	// IP 的并发尝试才会被限流器按序计数；挪出锁外的话，并发请求会在计数
 	// 落地前全部通过检查，"3 次/30 秒"窗口即被突破。
-	mu      sync.Mutex
-	hash    string
-	enabled bool
+	mu   sync.Mutex
+	hash string
+	// enabled 刻意不放进 mu：它是每请求热路径（withAuth 问一次，连每个
+	// 视频 Range 都算），若走 mu 就会被下面的 Argon2id（~25ms）与
+	// saveConfigLocked 的落盘 IO 整段串行化。改动它请先看
+	// TestEnabledIsLockFree。
+	enabled atomic.Bool
 	pepper  string
 	failed  map[string]*failedAttempt // ip → 失败记录
 	dir     string                    // 配置目录
@@ -118,7 +123,7 @@ func (m *Manager) loadConfig() {
 	if cfg.PasswordHash != nil {
 		m.hash = *cfg.PasswordHash
 	}
-	m.enabled = cfg.Enabled
+	m.enabled.Store(cfg.Enabled)
 	if cfg.Pepper != nil {
 		m.pepper = *cfg.Pepper
 	}
@@ -131,7 +136,7 @@ func (m *Manager) saveConfigLocked() {
 		h := m.hash
 		cfg.PasswordHash = &h
 	}
-	cfg.Enabled = m.enabled
+	cfg.Enabled = m.enabled.Load()
 	if m.pepper != "" {
 		p := m.pepper
 		cfg.Pepper = &p
@@ -173,16 +178,22 @@ func writeFileAtomic(path string, data []byte) error {
 
 // ---- 状态查询与设置 ----
 
+// Status 报告密码保护状态。只在桌面端 UI 路径调用，不在请求热路径上，
+// 因此仍取 mu（需要读 m.hash）。
 func (m *Manager) Status() models.PasswordStatus {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return models.PasswordStatus{Enabled: m.enabled, HasPassword: m.hash != ""}
+	return models.PasswordStatus{Enabled: m.enabled.Load(), HasPassword: m.hash != ""}
 }
 
+// Enabled 报告密码保护是否启用。
+//
+// 这是 withAuth 每个请求都要问的问题（含视频流的每个 Range），必须无锁：
+// 若走 mu，整站请求会被 Authenticate 里的 Argon2id（~25ms）与
+// saveConfigLocked 的落盘 IO 排在后面。锁定这一约束的测试见
+// TestEnabledIsLockFree。
 func (m *Manager) Enabled() bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.enabled
+	return m.enabled.Load()
 }
 
 // SetPasswordEnabled 启用/禁用密码保护。启用前提是已设置密码。
@@ -192,7 +203,7 @@ func (m *Manager) SetPasswordEnabled(enabled bool) error {
 	if enabled && m.hash == "" {
 		return apperr.PasswordError("请先设置密码再启用密码保护")
 	}
-	m.enabled = enabled
+	m.enabled.Store(enabled)
 	m.saveConfigLocked()
 	return nil
 }
@@ -220,7 +231,7 @@ func (m *Manager) ResetPassword() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.hash = ""
-	m.enabled = false
+	m.enabled.Store(false)
 	m.clearSessions()
 	m.saveConfigLocked()
 	return nil

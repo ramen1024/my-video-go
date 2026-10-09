@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -151,6 +152,70 @@ func TestSetPasswordEnabledRequiresPassword(t *testing.T) {
 	if m.Enabled() || m.Status().HasPassword {
 		t.Fatal("ResetPassword 应清密码并禁用保护")
 	}
+}
+
+// Enabled 必须在持有 m.mu 时也能立即返回。
+//
+// 它是 withAuth 每个请求（含视频流的每个 Range）都要问的问题。若改回
+// 读 mu，这里会超时：mu 会被 Authenticate 的 Argon2id 与
+// saveConfigLocked 的落盘 IO 整段持有。
+func TestEnabledIsLockFree(t *testing.T) {
+	m := newTestManager(t)
+	if err := m.SetPassword("1234"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.SetPasswordEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	done := make(chan bool, 1)
+	go func() { done <- m.Enabled() }()
+
+	var got bool
+	select {
+	case got = <-done:
+	case <-time.After(2 * time.Second):
+		m.mu.Unlock()
+		t.Fatal("Enabled() 在 mu 被持有时阻塞：它不应取 mu")
+	}
+	m.mu.Unlock()
+
+	if !got {
+		t.Fatal("已启用时应返回 true")
+	}
+}
+
+// 反复开关保护：与 Enabled() 并发不应触发数据竞争（依赖 -race 才能查出）。
+func TestEnabledConcurrentToggle(t *testing.T) {
+	m := newTestManager(t)
+	if err := m.SetPassword("1234"); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 20; j++ {
+				_ = m.Enabled()
+			}
+		}()
+	}
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			for j := 0; j < 5; j++ {
+				if err := m.SetPasswordEnabled(i%2 == 0); err != nil {
+					t.Errorf("SetPasswordEnabled 失败: %v", err)
+					return
+				}
+			}
+		}(i)
+	}
+	wg.Wait()
 }
 
 func TestAuthenticateWrongPassword(t *testing.T) {

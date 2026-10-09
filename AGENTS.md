@@ -51,7 +51,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - `scanner/` — `Scan`（WalkDir、白名单小写比较、1MiB 报告制、不跟随符号链接、
   拒绝根目录、取消）与 `ScanAndStore`（ScanGuard 互斥 + 原子替换列表）
 - `password/` — Argon2id（m=19456,t=2,p=1）、4 位数字校验、session、IP 限流、
-  `password_config.json` 持久化（0600）
+  `password_config.json` 持久化（0600）。`enabled` 是 `atomic.Bool` 而非 `mu` 保护的
+  字段：`Enabled()` 在 `withAuth` 的每请求路径上（含每个视频 Range），走 mu 会让
+  整站请求排在 Argon2id（~25ms）与配置落盘后面。`TestEnabledIsLockFree` 锁定这一点，
+  **不要**把它改回受 `mu` 保护
 - `share/` — 内嵌 HTTP 服务器：`Handler()` 组装 安全头 → Host 校验 → 会话鉴权 → 路由；
   `ResolveVideoPath` 是桌面端与网页端共用的路径解析/校验；`VideoHandler` 是两端共用的
   `/video/*` 流式播放处理（路径校验/白名单/Range）
