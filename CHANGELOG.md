@@ -2,6 +2,62 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式。
 
+## [0.3.0] - 2026-10-10
+
+### 修复
+
+- 启动失败完全静默：GUI 程序没有可见控制台，日志是唯一诊断来源，而失败路径
+  一律 `slog.Error` + 退出，用户只看到双击没反应。现在 `logging.Setup` 在数据
+  目录不可写时回退 `%TEMP%`，并把实际生效的日志路径返回给调用者；新增
+  `showFatalError` 在 Windows 用 `MessageBoxW` 呈现错误原因与日志位置
+  （`logging`/`fatal_windows.go`/`fatal_other.go`）
+- 会话过期被误报成"该文件无法在内置播放器中播放"：`withAuth` 对所有未认证请求
+  一律 `302` 到 `/login`，正在看视频的人拖一次进度条就会让 `<video>` 跟随重定向
+  拿到 200 + `text/html` 的登录页。现在只对文档导航保留 `302`，其余（`fetch`
+  的 JSON、`/video/*` 的 Range、静态资源）一律 `401` + `text/plain` + `no-store`；
+  网页端新增 `isPlaybackAuthFailure`，用一次 1 字节 Range 请求确认状态码后提示
+  重新登录，而不是回退到同样要过鉴权的系统播放器
+- 扫描跳过文件的提示条膨胀成一大段文字，把视频列表挤出视野：正文只保留跳过
+  数量与体积阈值（"已跳过 23 个小于 1 MB 的文件"），逐文件明细移入原生 `title`
+  悬停提示；CSS 由 `word-break:break-all` 改为 `nowrap` + 省略号
+- 视频列表 `ETag` 计算的回归：上一次"性能优化"把字符串写入改为
+  `io.WriteString`，以为能走 `hash.Hash` 的 `StringWriter` 快路径。实际
+  `*sha256.Digest` 没有 `WriteString` 方法，调用只会退化成 `w.Write([]byte(s))`，
+  且转换发生在 `io` 包的接口调用里、逃逸分析放不到栈上——2000 条列表的分配
+  从 3 次涨到 4004 次、耗时约 1.7×。已改回函数内局部的栈缓冲，并补
+  `etag_bench_test.go` 留下对照基准
+
+### 变更
+
+- `/video/*` 的路径包含检查改用标准库 `os.Root`（内核按目录句柄判定，
+  不再逐段 `Lstat`）。两处可见差异：**绝对符号链接被拒绝**（即便它指向共享
+  文件夹内部；桌面端 `PlayVideo` 交给系统播放器的那条路径仍用旧逻辑，这是
+  有意保留的）；扩展名白名单改为按**请求路径**判定，非视频请求统一 `403`，
+  不再因文件是否存在而在 `403`/`404` 之间变化
+- `/videos`、`/refresh-status`、`/auth` 三个 JSON 接口在客户端支持时返回
+  `Content-Encoding: gzip`，并附 `Vary: Accept-Encoding`（同一个 `ETag` 对应
+  两种字节表示，缺 `Vary` 会让中间缓存串味）。`304` 不压缩且不带
+  `Content-Encoding`；`/video/*`（Range/206 与 `Content-Length` 语义不能被
+  压缩层破坏，视频本身也无可压空间）、静态资源、登录页一律不压
+- `AGENTS.md` 补充"下次别踩"的陷阱说明（ETag 不要改成 `io.WriteString`、
+  `constants` 扩展名清单必须全小写、`apperr` 不要再加包装函数、性能数字要现测）；
+  `apperr`/`constants`/`localips` 三个包此前没有任何测试文件，现已补齐
+
+### 性能
+
+- `/video/*` 完整请求 `2203µs → 746µs`（4 层子目录 `2864µs → 891µs`，
+  分配次数 `154 → 38`）。有意不缓存 `*os.Root`：Windows 上长期持有目录句柄
+  会让用户无法重命名或删除正在共享的目录
+- 2000 条视频列表的 JSON 响应 `370KB → 6.4KB`（该样本文件名重复度高，
+  真实库压缩率会低一些）。`gzip.Writer` 经 `sync.Pool` 复用，列表是每 30 秒
+  轮询一次，每次新建要分配约 1.2MB 窗口
+- 密码保护的 `Enabled()` 改 `atomic.Bool`：它原本取 `m.mu`，而同一把锁整段
+  包着 Argon2id 验证（约 25ms + 20MB 分配），任何一次登录尝试或改密都会把
+  整站新请求（含视频流的每个 Range）排在几十毫秒的临界区后面。限流计数与
+  验证同临界区的语义未动
+- 扫描排序改为预计算小写键再排索引（5000 条约 `1.12ms → 0.59ms`，
+  分配 `12234 → 5006` 次）
+
 ## [0.2.0] - 2026-10-07
 
 ### 修复

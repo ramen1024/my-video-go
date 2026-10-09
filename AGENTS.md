@@ -139,7 +139,14 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   它必须是 `videoTypes` 的子集（`check-config-sync.mjs` 断言）
 - **跨文件一致性由 `scripts/check-config-sync.mjs` 把守**（接入 pnpm check/build）：
   INLINE ⊆ VIDEO_TYPES、两清单无重复全小写、`DEFAULT_SHARE_PORT`/`MIN_VIDEO_FILE_SIZE_BYTES`
-  与 Go 常量一致。同一个决策写两处时必须同步补断言
+  与 Go 常量一致、**版本号在 `wails.json` 的 `info.productVersion` /
+  `frontend/package.json` 的 `version` / `CHANGELOG.md` 最新条目三处一致**。
+  同一个决策写两处时必须同步补断言
+- **发版改版本号要同时动三处**：`wails.json:14`（进 exe 版本资源）、
+  `frontend/package.json:4`、`CHANGELOG.md` 顶部的 `## [x.y.z] - 日期`。
+  漏掉 CHANGELOG 是这里最常见的漂移，`check-config-sync.mjs` 会红灯。
+  打 tag 即触发 `.github/workflows/release.yml` 构建并创建 Release，
+  已发布过的 tag 不要原地重打（附件与已下载的人会对不上）
 - **绝不能把大响应（视频）塞进 Wails 资产服务**：Wails v2 在 Windows 上把资产服务的
   响应体**全量缓冲进内存**后才交给 WebView2（`pkg/assetserver/webview/
   responsewriter_windows.go` 的 `body *bytes.Buffer` + `PutByteContent`），大视频会

@@ -99,7 +99,41 @@ if (!/constants\.IPCacheTTLSecs/.test(cacheTTLDecl[1])) {
   );
 }
 
+// ---------- 4. 版本号：wails.json / frontend/package.json / CHANGELOG 三处一致 ----------
+
+// 产品版本写在两个 JSON 里（wails.json 的 productVersion 进 exe 版本资源，
+// package.json 的 version 只是记录），CHANGELOG 的顶层条目再写一遍。三处漂移
+// 的症状是"发出去的 exe 自称旧版本"——发布之后才发现，而那时 tag 已经推了。
+//
+// 不要图省事只比前两处：CHANGELOG 漏写新条目是这里最容易发生的一种漂移。
+const wailsJson = JSON.parse(readFileSync(join(root, "wails.json"), "utf8"));
+const pkgJson = JSON.parse(readFileSync(join(root, "frontend/package.json"), "utf8"));
+
+const productVersion = wailsJson?.info?.productVersion;
+if (typeof productVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(productVersion)) {
+  fail(`wails.json 的 info.productVersion 缺失或不是 x.y.z 形式：${productVersion}`);
+}
+if (pkgJson.version !== productVersion) {
+  fail(
+    `frontend/package.json 的 version(${pkgJson.version}) 与 wails.json 的 ` +
+      `productVersion(${productVersion}) 不一致`,
+  );
+}
+
+// CHANGELOG 规定最新版本写在最上面，因此取第一个 `## [x.y.z]` 标题
+const changelog = readFileSync(join(root, "CHANGELOG.md"), "utf8");
+const changelogVersion = changelog.match(/^##\s*\[(\d+\.\d+\.\d+)\]/m)?.[1];
+if (!changelogVersion) {
+  fail("CHANGELOG.md 中找不到形如 `## [x.y.z]` 的版本标题");
+}
+if (changelogVersion !== productVersion) {
+  fail(
+    `CHANGELOG.md 最新条目为 ${changelogVersion}，与 wails.json 的 ` +
+      `productVersion(${productVersion}) 不一致（改版本号时别忘了 CHANGELOG）`,
+  );
+}
+
 console.log(
   `✓ 配置一致性校验通过：INLINE(${inlineExts.length}) ⊆ VIDEO_TYPES(${videoExts.length})，` +
-    `端口/体积常量一致，IP 缓存 TTL 单一来源`,
+    `端口/体积常量一致，IP 缓存 TTL 单一来源，版本号 v${productVersion} 三处一致`,
 );
