@@ -141,6 +141,14 @@ Session Cookie 属性：`HttpOnly; SameSite=Strict; Path=/`，有效期与服务
 服务器返回 `304 Not Modified`（响应体为空，同样带 `ETag`）。网页端即依赖这一机制
 避免重复传输与重渲染。
 
+**压缩：** 客户端带 `Accept-Encoding: gzip` 时，`/videos`、`/refresh-status`、`/auth`
+三个 JSON 接口会返回 `Content-Encoding: gzip`，并附 `Vary: Accept-Encoding`
+（同一个 `ETag` 对应两种字节表示，缺 `Vary` 会让中间缓存串味）。`q=0` 表示显式拒绝，
+此时返回明文。`304` 响应不压缩且不带 `Content-Encoding`，但仍会带 `Vary`。
+
+**不压缩的端点：** `/video/*`（视频已是压缩格式，且 Range 与 `Content-Length`
+语义不能被压缩层破坏）、静态资源、登录页。
+
 ### `POST /refresh`
 
 触发后台重新扫描共享文件夹，并异步更新视频列表。改状态的请求不使用 GET，

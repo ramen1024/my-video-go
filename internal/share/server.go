@@ -127,6 +127,7 @@ func (s *Server) Handler() http.Handler {
 	var h http.Handler = mux
 	h = withAuth(s.st, s.pw, h)
 	h = withHostCheck(s.ips, h)
+	h = withGzip(h)
 	h = withSecurityHeaders(h)
 	return h
 }

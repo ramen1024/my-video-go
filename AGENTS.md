@@ -74,7 +74,9 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 3. 需要暴露给网页端时，同步 `internal/share` 的路由与 `docs/api.md`
 
 **新增一个 HTTP 端点的步骤：** `internal/share/server.go` 注册路由 + handler；
-`docs/api.md` 补契约；`server_test.go` 补测试。
+`docs/api.md` 补契约；`server_test.go` 补测试。**若是 JSON 接口，还要把它加进
+`internal/share/compression.go` 的 `gzipEligiblePaths`（显式枚举，不按前缀推断——
+避免不小心把视频流或二进制压进去）。
 
 ## Quirks
 
@@ -108,6 +110,13 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   无法重命名/删除正在共享的视频目录（也会让 `t.TempDir()` 清理失败）
 - **`/video/*` 的扩展名白名单按请求路径判定**（不是打开后看真实文件名）：
   非视频请求统一 403，不因文件是否存在而在 403/404 间变化，避免用状态码探测
+- **gzip 只在 `gzipEligiblePaths` 列出的 JSON 接口上启用**（2000 条列表实测
+  370KB → 6.4KB）。两条硬约束：**`/video/*` 绝不能压**（Range/206 与
+  `Content-Length` 语义会被破坏，视频本身也无可压空间）；**304 绝不能写出任何
+  压缩字节**（`statusBodyless` 会撤掉 `Content-Encoding` 且不启动压缩器，否则
+  那 10 字节 gzip 块头会污染客户端缓存）。压缩在 `WriteHeader` 时启用而非进入
+  handler 前——`Content-Encoding` 是响应头，handler 一旦 `WriteHeader` 就改不了。
+  同一 ETag 对应两种字节表示，**必须**保留 `Vary: Accept-Encoding`
 - `INLINE_PLAYABLE_EXTENSIONS`（format.ts，能否内联播放）是**启发式清单不是保证**：
   不要改成 `canPlayType` 探测（假阴性），不要当硬保证；`VideoPlayer` 的播放失败回退
   （error 事件 → 系统播放器，页面侧在 App.svelte 的 handlePlaybackFailure）不能删。
