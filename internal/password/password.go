@@ -247,13 +247,21 @@ func (m *Manager) ResetPassword() error {
 }
 
 // GenerateRandomPassword 生成随机 4 位数字密码（含前导零）。
-// crypto/rand.Read 自 Go 1.24 起保证不返回错误；即便失败 b 保持零值，
-// 结果也只会是固定的 "0000"，由用户手动修改。
+//
+// 用 crypto/rand 取模会引入偏差：65536 = 6*10000 + 5536，直接把 16 位值 % 10000
+// 会让低 5536 个数（0000–5535）出现的概率高出约 17%。这里用拒绝采样消除偏差
+// （拒绝区间只占 8.4%，循环几乎总是走一次）。
 func GenerateRandomPassword() string {
-	var b [2]byte
-	_, _ = rand.Read(b[:])
-	n := (uint16(b[0])<<8 | uint16(b[1])) % 10000
-	return fmt.Sprintf("%04d", n)
+	// 与 10000 的最大整数倍：低于它的值可以无偏地取模
+	const limit = 60000
+	for {
+		var b [2]byte
+		_, _ = rand.Read(b[:]) // Go 1.24 起 crypto/rand.Read 保证不返回错误
+		v := uint16(b[0])<<8 | uint16(b[1])
+		if v < limit {
+			return fmt.Sprintf("%04d", v%10000)
+		}
+	}
 }
 
 // ---- 认证 ----

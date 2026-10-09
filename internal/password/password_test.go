@@ -448,6 +448,54 @@ func TestGenerateRandomPassword(t *testing.T) {
 	}
 }
 
+// 生成必须覆盖 0000–9999 全区间且分布无明显偏差。
+//
+// 旧实现直接把 16 位随机值 % 10000，而 65536 = 6*10000 + 5536：低于 5536 的
+// 1536 个值会多拿到一次映射机会，于是低段概率整体高出约 17%。
+func TestGenerateRandomPasswordDistribution(t *testing.T) {
+	const draws = 400_000
+	counts := make([]int, 10000)
+	for i := 0; i < draws; i++ {
+		pw := GenerateRandomPassword()
+		n := 0
+		for j := 0; j < 4; j++ {
+			n = n*10 + int(pw[j]-'0')
+		}
+		if n < 0 || n > 9999 {
+			t.Fatalf("越界值: %q", pw)
+		}
+		counts[n]++
+	}
+
+	for v, c := range counts {
+		if c == 0 {
+			t.Fatalf("值 %04d 从未出现（覆盖不全）", v)
+		}
+	}
+
+	// 分段均值比较：卡方/逐桶判定对单桶噪声太敏感（每桶 ~40 次抽样时
+	// 标准差约 6，偶发 26 vs 期望 20 完全正常）。旧实现的偏差是**系统性**的，
+	// 落在 5536 这条分界上，因此比较两段的平均出现次数最稳、最不易误报。
+	var lowSum, highSum int
+	for v, c := range counts {
+		if v < 5536 {
+			lowSum += c
+		} else {
+			highSum += c
+		}
+	}
+	lowAvg := float64(lowSum) / 5536.0
+	highAvg := float64(highSum) / 4464.0
+	ratio := lowAvg / highAvg
+
+	// 无偏时比值应为 1.0（两段均值各自的标准误差 << 1%）；
+	// 旧实现约为 1.176，远超下面的容差
+	if ratio < 0.98 || ratio > 1.02 {
+		t.Fatalf("分布存在系统性偏差：低位均值 %.2f / 高位均值 %.2f = %.4f（应接近 1.0）",
+			lowAvg, highAvg, ratio)
+	}
+}
+
 func isAllDigits(s string) bool {
 	for i := 0; i < len(s); i++ {
 		if s[i] < '0' || s[i] > '9' {
