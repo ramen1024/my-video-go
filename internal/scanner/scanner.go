@@ -107,9 +107,13 @@ func Scan(folder string, cancel *atomic.Bool) (*Result, error) {
 
 // sortByNameLower 按文件名小写升序排序（稳定排序，同名保持遍历顺序）。
 //
-// 比较器里调 strings.ToLower 会在每次比较时分配两个临时字符串：
-// O(n log n) 次比较 → 5000 条时多出约 12000 次分配（实测 1.43ms → 0.69ms）。
-// 这里预先算好小写键再排序索引，分配降到 O(n)。
+// 不要改回在比较器里调 strings.ToLower：每次比较都要分配两个临时字符串，
+// O(n log n) 次比较下分配量随 n log n 增长。这里预先算好小写键、只排序索引，
+// 分配降到 O(n)。
+//
+// 5000 条实测（go test -bench SortByNameLower ./internal/scanner/）：
+// 本实现约 0.59ms / 5006 次分配，比较器版约 1.12ms / 12234 次分配 —— 快约 1.9×
+// 且分配少 2.4×（代价是多两个 O(n) 切片，B/op 反而更高，仍远小于省下的量）。
 func sortByNameLower(videos []models.VideoFile) {
 	keys := make([]string, len(videos))
 	for i, v := range videos {

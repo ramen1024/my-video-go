@@ -47,14 +47,23 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - `apperr/` — 面向前端的应用错误（只有 `Error()` 返回中文 message，**没有类型字段**）。
   前端只能看到 message 字符串、服务端也不按类型分流，旧的 7 个 `Type` 常量与 `IsType`
   只被测试用来断言"调对了哪个构造函数"，那是在测实现细节。**测试直接断言 `Error()`
-  文本**——那才是前端与用户真正看到的
-- `constants/` — 全部常量（端口 6008、1 MiB、限流参数、VIDEO_TYPES 扩展名→Content-Type）
+  文本**——那才是前端与用户真正看到的。**不要**再加 `AsAppError` 之类的包装：
+  曾经有过一个（零调用者），全仓库拿错误只做 `slog.Error("…", "err", err)` 或
+  直接回传，用 `errors.As` 的辅助函数没有存在理由
+- `constants/` — 全部常量（端口 6008、1 MiB、限流参数、VIDEO_TYPES 扩展名→Content-Type）。
+  扩展名清单必须全小写、查表前由调用方小写化（`constants_test.go` 锁定）
 - `models/` — VideoFile / ScanReport / ShareStatus 等（JSON snake_case，前后端契约，
-  有契约测试锁定字段名）+ `ComputeETag`
+  有契约测试锁定字段名）+ `ComputeETag`。ETag 的字符串字段走**可复用的栈缓冲**：
+  `sha256.New()` 的具体类型 `*sha256.Digest` 没有 `WriteString` 方法，
+  `io.WriteString` 只会退化成 `w.Write([]byte(s))`，且那次转换发生在 io 包的接口调用里、
+  逃逸分析放不到栈上 → 每个字段一次堆分配。**不要**把它"优化"成 `io.WriteString`：
+  2000 条列表的分配会从 3 次跳到 4004 次（对照基准见 `internal/models/etag_bench_test.go`）
 - `scanner/` — `Scan`（WalkDir、白名单小写比较、1MiB 报告制、不跟随符号链接、
   拒绝根目录、取消）与 `ScanAndStore`（ScanGuard 互斥 + 原子替换列表）。排序走
-  `sortByNameLower`（预计算小写键，5000 条 1.02ms → 0.69ms、allocs 12282 → 5054）；
-  **不要**改回比较器里调 `strings.ToLower`（每次比较分配两个临时字符串）
+  `sortByNameLower`（预计算小写键 + 只排序索引）；
+  **不要**改回比较器里调 `strings.ToLower`（每次比较分配两个临时字符串，分配量随
+  n log n 增长）。性能数字请现测而不是引用注释：`go test -bench SortByNameLower ./internal/scanner/`
+  （5000 条约 0.59ms / 5006 allocs，比较器版约 1.12ms / 12234 allocs）
 - `password/` — Argon2id（m=19456,t=2,p=1）、4 位数字校验、session、IP 限流、
   `password_config.json` 持久化（0600）。`enabled` 是 `atomic.Bool` 而非 `mu` 保护的
   字段：`Enabled()` 在 `withAuth` 的每请求路径上（含每个视频 Range），走 mu 会让
