@@ -113,6 +113,26 @@ for (const [name, goArity] of goBindings) {
   }
 }
 
+// ---------- 1c. "扫描已取消" 这类跨语言文案必须两侧一致 ----------
+
+// 前端用 `msg.includes("扫描已取消")` 判断"用户主动取消"（要显示成中性提示，
+// 而不是"扫描失败: …"）。判据是 Go 侧 apperr 的中文文案，两侧各写一份、
+// 且**没有任何编译期约束**：Go 改了字，前端会静默降级成"扫描失败"。
+const scannerGo = readFileSync(join(root, "internal/scanner/scanner.go"), "utf8");
+const appSvelte = readFileSync(join(root, "frontend/src/App.svelte"), "utf8");
+
+const cancelledMatch = scannerGo.match(/apperr\.ScanCancelled\("([^"]+)"\)/);
+if (!cancelledMatch) {
+  fail("internal/scanner/scanner.go 中找不到 apperr.ScanCancelled(\"…\")");
+}
+const cancelledText = cancelledMatch[1];
+if (!appSvelte.includes(`"${cancelledText}"`)) {
+  fail(
+    `App.svelte 未引用取消文案 "${cancelledText}"：前端靠 msg.includes(该文案) 区分` +
+      '"用户取消"与"扫描失败"，Go 侧改了字必须同步前端（否则取消会被报成失败）',
+  );
+}
+
 // ---------- 2. 端口与最小体积常量一致 ----------
 
 const configTs = readFileSync(join(root, "frontend/src/lib/config.ts"), "utf8");

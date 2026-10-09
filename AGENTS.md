@@ -163,7 +163,9 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   `frontend/package.json` 的 `version` / `CHANGELOG.md` 最新条目三处一致**、
   `app.go` 的绑定方法与 `desktop.ts` 的 `AppBindings` 名字与参数个数一一对应、
   **`docs/api.md` 里复述的常量值**（session 小时数、限流"连续 N 次失败后锁 M 秒"、
-  刷新冷却秒数、端口重试个数、`/auth` 请求体 KB、默认端口示例）与 Go 常量一致。
+  刷新冷却秒数、端口重试个数、`/auth` 请求体 KB、默认端口示例）与 Go 常量一致、
+  **"扫描已取消"文案**在 `scanner.go` 与 `App.svelte` 两侧一致（前端靠
+  `msg.includes()` 区分"用户取消"与"扫描失败"，改字会静默降级成失败提示）。
   同一个决策写两处时必须同步补断言。
   注意断言要钉**代码**而不是注释：禁 `canPlayType` 的那条必须先剥掉注释再匹配，
   否则 format.ts 里"解释为什么不要用它"的注释本身就会让检查红灯
