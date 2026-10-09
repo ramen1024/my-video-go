@@ -47,13 +47,15 @@ func (s *Server) Start() error {
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /video/", share.VideoHandler{State: s.st})
-	s.srv = &http.Server{
+	srv := &http.Server{
 		Handler:           mux,
 		ReadHeaderTimeout: constants.HTTPReadHeaderTimeout,
 		IdleTimeout:       constants.HTTPIdleTimeout,
 	}
+	s.srv = srv
+	// 与 share.Server 同一写法：捕获局部 srv，不在 goroutine 里读可能被改动的字段
 	go func() {
-		_ = s.srv.Serve(ln) // Stop 关闭 listener 后自然返回
+		_ = srv.Serve(ln) // Stop 关闭 listener 后自然返回
 	}()
 	return nil
 }

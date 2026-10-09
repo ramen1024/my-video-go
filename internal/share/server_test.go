@@ -558,6 +558,42 @@ func TestSecurityHeaders(t *testing.T) {
 	}
 }
 
+// 立刻 Start→Stop 是最短的收尾路径（用户开启共享后马上关窗）。
+//
+// 曾经的写法让 Serve 在 goroutine 里读 s.srv/s.ln 字段，而 Stop 会把它们置 nil：
+// 只要 goroutine 还没被调度，Serve 就会在 nil 接收者上解引用而 panic。
+// 回归护栏：循环足够多次以覆盖"Stop 抢先执行"的交错。
+func TestStartStopImmediately(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		s, _ := newTestServer(t, false)
+		if _, err := s.Start(0); err != nil {
+			t.Fatalf("第 %d 次 Start 失败: %v", i, err)
+		}
+		if err := s.Stop(); err != nil {
+			t.Fatalf("第 %d 次 Stop 失败: %v", i, err)
+		}
+		// 停止后必须是干净状态：Port 归零、可再次 Start
+		if s.port != 0 || s.srv != nil || s.ln != nil {
+			t.Fatalf("第 %d 次 Stop 后实例字段未清空: port=%d srv=%v ln=%v", i, s.port, s.srv, s.ln)
+		}
+	}
+}
+
+// 端口非法时不得拼出 %!w(<nil>)：lastErr 为空说明一个候选端口都没试过。
+// 注意 port==0 是合法的（交给系统挑端口），只有越界值才算非法。
+func TestStartWithInvalidPort(t *testing.T) {
+	s, _ := newTestServer(t, false)
+	for _, port := range []int{-1, 65536, 70000} {
+		_, err := s.Start(port)
+		if err == nil {
+			t.Fatalf("端口 %d 应报错", port)
+		}
+		if strings.Contains(err.Error(), "%!") {
+			t.Fatalf("端口 %d 的错误文案含格式化残留: %q", port, err.Error())
+		}
+	}
+}
+
 func TestLoginTemplateInvariants(t *testing.T) {
 	// 模板必须用裸 <script> 标签（nonce 注入依赖）
 	if !strings.Contains(loginTemplate, "<script>") {

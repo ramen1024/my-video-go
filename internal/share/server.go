@@ -48,6 +48,14 @@ func New(st *state.AppState, pw *password.Manager, assets fs.FS) *Server {
 // 判断成败，"本次全部端口绑定失败"会被误判为成功（假 listener、旧端口、
 // 实际无人监听）。重复 Start 前必须先 Stop（由 AppState 状态机保证）。
 func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
+	// 端口合法性必须先拦：port 为负时 net.Listen 会退化成绑随机端口（0），
+	// 静默变成"绑到任意端口"；port > 65535 则一个候选都试不到，
+	// 于是 lastErr 为空、错误文案拼成 %!w(<nil>)。
+	// port == 0 是有意义的：交给系统挑一个空闲端口（测试与预览用）。
+	if port < 0 || port > 65535 {
+		return nil, fmt.Errorf("无效的端口号: %d", port)
+	}
+
 	ips := localips.Get()
 
 	var lastErr error
@@ -68,20 +76,29 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 		break
 	}
 	if ln == nil {
+		// lastErr 理论上不会为 nil（port 已被上面的校验拦下），保底避免 %!w(<nil>)
+		if lastErr == nil {
+			lastErr = errors.New("没有可用端口")
+		}
 		return nil, fmt.Errorf("服务器启动失败: %w", lastErr)
 	}
 
-	s.ips = ips
-	s.ln = ln
-	s.port = listenPort
-	s.srv = &http.Server{
+	srv := &http.Server{
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: constants.HTTPReadHeaderTimeout,
 		IdleTimeout:       constants.HTTPIdleTimeout,
 	}
+	s.ips = ips
+	s.ln = ln
+	s.port = listenPort
+	s.srv = srv
+
+	// 必须把 srv/ln 捕获成局部变量再进 goroutine：Stop 会把 s.srv/s.ln 置 nil，
+	// 而本 goroutine 未必已被调度——直接读字段会在 Serve 里对 nil 接收者解引用
+	// （Start 后立刻 Stop 时崩溃于 net/http.(*Server).Serve）。
 	go func() {
-		// Stop/Shudown 关闭 listener 后 Serve 返回 ErrServerClosed，属正常退出
-		if err := s.srv.Serve(s.ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		// Stop/Shutdown 关闭 listener 后 Serve 返回 ErrServerClosed，属正常退出
+		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Warn("共享服务器异常退出", "err", err)
 		}
 	}()
