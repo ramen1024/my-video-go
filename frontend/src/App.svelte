@@ -32,6 +32,13 @@
    * 它只是解释列表为什么比目录里的文件少。
    */
   let noticeMsg = $state("");
+  /**
+   * 提示条的悬停明细（跳过文件名列表）
+   *
+   * 与 `noticeMsg` 分开存放：正文必须单行，明细只作为 `title` 出现。
+   * 桌面端有逐文件明细，网页端只有数量（此时为空串，不给空悬停提示）。
+   */
+  let noticeDetail = $state("");
   let currentVideo = $state<VideoItem | null>(null);
   let isSharing = $state(false);
   let shareInfo = $state<ShareServerInfo | null>(null);
@@ -60,10 +67,12 @@
     isScanning = true;
     errorMsg = "";
     noticeMsg = "";
+    noticeDetail = "";
     try {
       const { videos: next, report } = await platform.rescan(currentFolder);
       videos = next;
       noticeMsg = describeSkipped(report);
+      noticeDetail = describeSkippedDetail(report);
     } catch (e) {
       const msg = parseAppError(e);
       errorMsg = msg.includes("扫描已取消") ? "扫描已取消" : "扫描失败: " + msg;
@@ -79,27 +88,36 @@
   }
 
   /**
-   * 生成"有多少文件被跳过、为什么"的提示文案
+   * 生成"有多少文件被跳过、为什么"的提示文案（**单行**，明细不进正文）
    *
    * 扫描会丢弃小于 `MIN_VIDEO_FILE_SIZE_BYTES` 的文件（空壳文件、下载残留等）。
    * 此前这类丢弃完全静默，用户只能自己数目录里有多少文件、再对比列表，
-   * 因此这里必须把数量和具体文件名都摆出来。
+   * 因此这里必须把**数量与阈值**摆出来——这两项就足以解释"列表为什么比目录少"。
    *
-   * 网页端只拿得到数量（服务端为省带宽不下发逐文件明细），此时省略文件名部分，
-   * 避免出现"小于 1 MB）："这样以冒号结尾却什么都没列的文案。
+   * 刻意只留一行：明细最多 20 条（`MaxSkippedFilesReported`），逐个内联会让提示
+   * 膨胀成一大段文字，把视频列表挤出视野，而这只是一条非错误的补充说明。
+   * 具体文件名与体积交给 `describeSkippedDetail`（悬停提示），不占纵向空间。
    */
   function describeSkipped(report: ScanReport): string {
     if (report.skipped_small_count === 0) return "";
-    const head = `已跳过 ${report.skipped_small_count} 个过小的文件（小于 ${formatFileSize(MIN_VIDEO_FILE_SIZE_BYTES)}）`;
-    if (report.skipped_small.length === 0) return head;
+    return `已跳过 ${report.skipped_small_count} 个小于 ${formatFileSize(MIN_VIDEO_FILE_SIZE_BYTES)} 的文件`;
+  }
 
+  /**
+   * 跳过文件的完整明细，用作提示条的原生 `title` 悬停文本
+   *
+   * 网页端拿不到逐文件明细（服务端为省带宽只下发数量），此时返回空串——
+   * 没有内容就不该出现一个空的悬停提示。
+   */
+  function describeSkippedDetail(report: ScanReport): string {
+    if (report.skipped_small.length === 0) return "";
     const names = report.skipped_small
       .map((f) => `${f.name}（${formatFileSize(f.size)}）`)
       .join("、");
     const more = report.skipped_small_truncated
       ? `，另有 ${report.skipped_small_count - report.skipped_small.length} 个未列出`
       : "";
-    return `${head}：${names}${more}`;
+    return names + more;
   }
 
   /** 交给系统默认播放器（网页端无此能力，由 canOpenWithSystemPlayer 守卫） */
@@ -299,7 +317,8 @@
   <ErrorMessage message={errorMsg} onDismiss={() => { errorMsg = ""; }} />
 
   {#if noticeMsg}
-    <div class="notice-message" role="status">
+    <!-- title 仅在有逐文件明细时给出（网页端只有数量），避免空悬停提示 -->
+    <div class="notice-message" role="status" title={noticeDetail || undefined}>
       <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
       <span>{noticeMsg}</span>
       <button class="dismiss-btn" onclick={() => { noticeMsg = ""; }} aria-label="关闭提示">
@@ -359,10 +378,17 @@
     border-radius: var(--radius-md);
     margin-bottom: 12px;
     font-size: 13px;
+    /* 单行：文案只含数量与阈值，但窄窗口下仍要保证不换行把列表挤出视野 */
+    flex-wrap: nowrap;
+    white-space: nowrap;
   }
 
   .notice-message span {
-    word-break: break-all;
+    /* 配合父级 nowrap：超长时省略而非换行；min-width:0 让 flex 子项能真正收缩，
+       否则 flex 的 min-content 宽度会顶开容器 */
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .dismiss-btn {
