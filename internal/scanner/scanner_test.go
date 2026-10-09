@@ -4,6 +4,7 @@ import (
 	"my-video-go/internal/models"
 	"my-video-go/internal/state"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -240,5 +241,86 @@ func TestScanMissingAndNotDir(t *testing.T) {
 	_, err = Scan(file, nil)
 	if err == nil || err.Error() != "路径不是文件夹" {
 		t.Fatalf("期望\"路径不是文件夹\": %v", err)
+	}
+}
+
+// makeJunction 建一个 NTFS 目录 junction（不需要管理员权限，与符号链接不同）。
+func makeJunction(t *testing.T, link, target string) {
+	t.Helper()
+	if _, err := exec.LookPath("cmd"); err != nil {
+		t.Skipf("无 cmd，跳过 junction 测试: %v", err)
+	}
+	out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput()
+	if err != nil {
+		t.Skipf("无法创建 junction（可能不是 NTFS）: %v (%s)", err, out)
+	}
+}
+
+// 用户显式选中的目录本身是 junction（媒体库用 <盘>:\\Videos -> <盘>:\\Media 很常见）时，
+// 必须照常展开。
+//
+// 不能直接把 folder 交给 WalkDir：它内部用 os.Lstat，而 junction 的 Lstat 类型为 0
+// （既非目录也非符号链接），遍历会在第 1 个条目就结束，返回"成功、0 个视频"，
+// 用户看到的是扫描完成但列表空，毫无线索。
+func TestScanJunctionRootExpands(t *testing.T) {
+	realDir := t.TempDir()
+	makeFile(t, filepath.Join(realDir, "movie.mp4"), 2*mib)
+	sub := filepath.Join(realDir, "Season 01")
+	os.MkdirAll(sub, 0o755)
+	makeFile(t, filepath.Join(sub, "ep.mp4"), 2*mib)
+
+	parent := t.TempDir()
+	link := filepath.Join(parent, "Videos")
+	makeJunction(t, link, realDir)
+
+	// 前置条件：os.Stat 认为它是目录（所以前置校验会放行）
+	si, err := os.Stat(link)
+	if err != nil || !si.IsDir() {
+		t.Fatalf("前置条件：junction 应被 os.Stat 认作目录")
+	}
+
+	res, err := Scan(link, nil)
+	if err != nil {
+		t.Fatalf("Scan(junction) 不应报错: %v", err)
+	}
+	if res.Report.Total != 2 {
+		t.Fatalf("junction 根目录应展开出 2 个视频（含子目录），得到 %d: %+v",
+			res.Report.Total, res.Videos)
+	}
+	// 相对路径必须相对**用户选中的 junction 路径**，否则前端 /video/* 取不到
+	want := map[string]bool{
+		"movie.mp4":                          true,
+		filepath.Join("Season 01", "ep.mp4"): true,
+	}
+	for _, v := range res.Videos {
+		if !want[v.RelativePath] {
+			t.Errorf("意外或错误的 relative_path: %q（期望相对 junction 路径）", v.RelativePath)
+		}
+	}
+}
+
+// junction 根目录下扫描出的条目必须能被 /video/* 取到：relative_path 必须
+// 相对共享目录（junction 路径）而不是被解析后的真实路径。
+func TestScanJunctionRootRelativePathsAreUsable(t *testing.T) {
+	realDir := t.TempDir()
+	makeFile(t, filepath.Join(realDir, "only.mp4"), 2*mib)
+
+	parent := t.TempDir()
+	link := filepath.Join(parent, "Videos")
+	makeJunction(t, link, realDir)
+
+	res, err := Scan(link, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Videos) != 1 {
+		t.Fatalf("应扫描到 1 个视频，得到 %d", len(res.Videos))
+	}
+	if res.Videos[0].RelativePath != "only.mp4" {
+		t.Fatalf("relative_path 应为 only.mp4，得到 %q", res.Videos[0].RelativePath)
+	}
+	if strings.Contains(res.Videos[0].RelativePath, "..") ||
+		filepath.IsAbs(res.Videos[0].RelativePath) {
+		t.Fatalf("relative_path 不得含 .. 或为绝对路径: %q", res.Videos[0].RelativePath)
 	}
 }
