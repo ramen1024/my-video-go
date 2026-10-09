@@ -36,6 +36,13 @@ func detect() []string {
 	if err != nil {
 		return []string{"127.0.0.1"}
 	}
+	return filterAddrs(addrs)
+}
+
+// filterAddrs 从网卡地址里挑出可对外广播的 IPv4，过滤回环、链路本地与多播；
+// 无可用地址时回退 ["127.0.0.1"]（绝不返回空切片：调用方会直接广播这些地址）。
+// 与 detect 分开是为了能脱离真实网卡测试过滤规则。
+func filterAddrs(addrs []net.Addr) []string {
 	var out []string
 	for _, addr := range addrs {
 		ipNet, ok := addr.(*net.IPNet)

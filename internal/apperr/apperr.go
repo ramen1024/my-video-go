@@ -12,7 +12,6 @@
 package apperr
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -60,17 +59,4 @@ func PasswordError(msg string) *AppError {
 // Other 其余不适合归入上述类别的情况（含状态机的"正在启动/停止中"）。
 func Other(format string, args ...any) *AppError {
 	return newf(format, args...)
-}
-
-// AsAppError 提取 *AppError，用于需要区分"应用错误"与底层错误的场景。
-// 遍历包裹链，遇到第一个非 AppError 即停止。
-//
-// 标准库的 errors.As 已能完成这件事；本函数只是让调用处少写一次类型参数。
-// 若调用点不需要忽略错误类型，直接用 errors.As(err, &target) 即可。
-func AsAppError(err error) (*AppError, bool) {
-	var target *AppError
-	if errors.As(err, &target) {
-		return target, true
-	}
-	return nil, false
 }
