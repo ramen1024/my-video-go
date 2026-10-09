@@ -20,7 +20,9 @@ type authRequest struct {
 // handleAuth 处理网页端登录：验证密码并签发 session cookie。
 // 失败响应统一 401（限流状态在 password.Manager 内部已更新）。
 func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
-	s.pw.CleanupOnce()
+	// 不在这里调 pw.CleanupOnce()：/auth 是唯一免鉴权、可被局域网任意设备
+	// 反复打的端点，而它要抢 m.mu（再叠 sessMu）并遍历两张表；Authenticate
+	// 内部已经会做失败记录的清理，session 则由 10 分钟的后台循环负责。
 
 	w.Header().Set("Cache-Control", "no-store")
 	// /auth 是免鉴权端点，局域网内任何设备都能到达，且 ReadHeaderTimeout 只管

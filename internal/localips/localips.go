@@ -20,15 +20,20 @@ var (
 
 // Get 返回本机全局 IPv4 列表（过滤回环、IPv6、169.254.* 链路本地地址），
 // 5 分钟内复用缓存；探测结果为空时回退 ["127.0.0.1"]。
+//
+// 返回**副本**：调用方会把这些地址长期存进 state.shareInfo.IPs 并作为 Host
+// 校验白名单（share.Server.Start 冻结 s.ips），若共享同一个底层数组，
+// 任何一处对返回值的修改都会悄悄改写那份"冻结"的白名单。
 func Get() []string {
 	mu.Lock()
 	defer mu.Unlock()
-	if cached != nil && time.Now().Before(expires) {
-		return cached
+	if cached == nil || !time.Now().Before(expires) {
+		cached = detect()
+		expires = time.Now().Add(cacheTTL)
 	}
-	cached = detect()
-	expires = time.Now().Add(cacheTTL)
-	return cached
+	out := make([]string, len(cached))
+	copy(out, cached)
+	return out
 }
 
 func detect() []string {

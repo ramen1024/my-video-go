@@ -108,7 +108,10 @@ func TestGetNeverEmpty(t *testing.T) {
 	}
 }
 
-// 缓存命中：TTL 内重复调用应返回同一份底层数组（不重复探测网卡）。
+// 缓存命中：TTL 内重复调用不应重复探测网卡（返回内容一致）。
+//
+// 注意**不能**断言两次返回同一个底层数组：Get 必须返回副本，否则调用方
+// （state.shareInfo.IPs / share.Server 的 Host 白名单）改动返回值会污染缓存。
 func TestGetCachesWithinTTL(t *testing.T) {
 	mu.Lock()
 	cached = nil // 清掉前一个测试可能留下的缓存，确保首次 Get 真正探测
@@ -119,7 +122,39 @@ func TestGetCachesWithinTTL(t *testing.T) {
 	if len(first) != len(second) {
 		t.Fatalf("缓存前后长度不同: %v vs %v", first, second)
 	}
-	if &first[0] != &second[0] {
-		t.Fatal("TTL 内两次 Get 未复用缓存（返回了不同底层数组）")
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("缓存前后内容不同: %v vs %v", first, second)
+		}
+	}
+}
+
+// Get 必须返回副本：调用方会把它存进 share_info 并冻结成 Host 白名单，
+// 若返回缓存本体，改动返回值就会悄悄改写那份白名单。
+func TestGetReturnsCopy(t *testing.T) {
+	mu.Lock()
+	cached = nil
+	mu.Unlock()
+
+	first := Get()
+	if len(first) == 0 {
+		t.Fatal("前置条件：应至少有一个地址")
+	}
+	original := first[0]
+
+	// 篡改返回值
+	first[0] = "203.0.113.7"
+
+	second := Get()
+	if second[0] != original {
+		t.Fatalf("篡改返回值污染了缓存：第二次拿到 %q，期望 %q", second[0], original)
+	}
+
+	// 缓存本体也不该把篡改写进去
+	mu.Lock()
+	cachedFirst := cached[0]
+	mu.Unlock()
+	if cachedFirst != original {
+		t.Fatalf("包内缓存被调用方改写：%q，期望 %q", cachedFirst, original)
 	}
 }

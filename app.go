@@ -12,6 +12,7 @@ import (
 	"my-video-go/internal/scanner"
 	"my-video-go/internal/share"
 	"my-video-go/internal/state"
+	neturl "net/url"
 	"path/filepath"
 	"strings"
 
@@ -88,6 +89,7 @@ func (a *App) PlayVideo(relativePath string) error {
 	if folder == "" {
 		return apperr.InvalidPath("未设置共享目录")
 	}
+	// 先按**链接名**快速拒绝明显不是视频的入参（省掉一次路径解析）
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(relativePath), "."))
 	if !constants.IsSupportedVideoExtension(ext) {
 		return apperr.InvalidPath("不允许打开非视频文件")
@@ -103,10 +105,25 @@ func (a *App) PlayVideo(relativePath string) error {
 	case err != nil:
 		return apperr.InvalidPath("无法解析视频文件路径")
 	}
+	// 必须再校验**解析后**目标文件的扩展名：ResolveVideoPath 会跟随符号链接，
+	// 一个名为 movie.mp4 的链接完全可能指向目录里的 payload.exe，而 rundll32 的
+	// FileProtocolHandler 会按扩展名关联把 .exe 当程序启动。扫描器本身不收录
+	// 符号链接，所以这条路径只能由手工构造的绑定调用触发——正因如此更要拦。
+	if !isSupportedVideoPath(abs) {
+		return apperr.InvalidPath("只能打开共享文件夹内的视频文件")
+	}
 	if err := openWithSystemPlayer(abs); err != nil {
 		return apperr.IoError("无法打开视频: %v", err)
 	}
 	return nil
+}
+
+// isSupportedVideoPath 判断路径的扩展名是否在视频白名单内（大小写不敏感）。
+// 单独抽出来是为了能被测试直接覆盖——它的调用点是"已经拿到真实路径、
+// 即将交给 ShellExecute"的最后一道闸门。
+func isSupportedVideoPath(path string) bool {
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
+	return constants.IsSupportedVideoExtension(ext)
 }
 
 // ---- 局域网共享 ----
@@ -197,7 +214,29 @@ func (a *App) PickFolder() (string, error) {
 }
 
 // OpenURL 用系统浏览器打开链接（共享面板的访问地址）。
+//
+// 只放行 http/https：runtime.BrowserOpenURL 最终走 ShellExecute，若把任意字符串
+// 透传过去，形如 `file:///C:/x.exe` 或自定义协议的入参会被交给对应的关联程序执行。
+// 当前唯一的调用方只传共享地址，这道校验是防止将来被复用到别处。
 func (a *App) OpenURL(url string) error {
+	if !isAllowedExternalURL(url) {
+		return apperr.InvalidPath("只允许打开 http/https 链接")
+	}
 	runtime.BrowserOpenURL(a.ctx, url)
 	return nil
+}
+
+// isAllowedExternalURL 判断链接是否可交给系统浏览器打开。
+// 单独抽出来是为了能被测试直接覆盖（不依赖 Wails 运行时）。
+func isAllowedExternalURL(raw string) bool {
+	u, err := neturl.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	scheme := strings.ToLower(u.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return false
+	}
+	// 必须有主机名：`http://` 这种空主机交给浏览器只会打开一个错误页
+	return u.Host != ""
 }
