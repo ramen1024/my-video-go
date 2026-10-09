@@ -114,6 +114,39 @@ func TestScanRejectsRootDirectory(t *testing.T) {
 	}
 }
 
+// 拒绝根目录的理由是"扫描整个盘会卡住"，因此各种等价写法都要认出来；
+// 同时绝不能把普通目录误判为根（那会让用户完全无法扫描该目录）。
+func TestIsRootDirectorySpellings(t *testing.T) {
+	roots := []string{
+		`C:\`, `C:/`, `c:\`, `D:\`,
+		`\`, `/`,
+		`C:`, // 驱动器相对：无法保证不是整盘，按根处理
+		`\\server\share`, `\\server\share\`,
+		`\\?\C:\`, `\\.\C:\`,
+		`C:\\`,             // 多余分隔符，Clean 后仍是根
+		`C:\Videos\..`,     // Clean 后正好是 `C:\`，等于选了盘根
+		`\\?\C:\Videos\..`, // 同上，带扩展长度前缀
+	}
+	for _, p := range roots {
+		if !isRootDirectory(p) {
+			t.Errorf("应判定为根目录: %q", p)
+		}
+	}
+
+	notRoots := []string{
+		`C:\Videos`, `C:\Videos\`, `D:\media\2024`,
+		`\\server\share\sub`, `\\server\share\sub\deep`,
+		`\\?\C:\Videos`,
+		`C:\V`, // 单字符目录名
+		`C:Videos`,
+	}
+	for _, p := range notRoots {
+		if isRootDirectory(p) {
+			t.Errorf("不应判定为根目录: %q", p)
+		}
+	}
+}
+
 func TestScanCancelled(t *testing.T) {
 	dir := t.TempDir()
 	makeFile(t, filepath.Join(dir, "a.mp4"), 2*mib)

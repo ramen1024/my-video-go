@@ -339,6 +339,101 @@ func TestHashAndVerify(t *testing.T) {
 	}
 }
 
+// verifyPassword 绝不能因为配置里的 PHC 参数被改坏而 panic。
+//
+// argon2.IDKey 对越界参数会 panic（t=0 → "number of rounds too small"、
+// p=0 → "parallelism degree too low"）；loadConfig 只校验 JSON 合法性，
+// 所以"合法 JSON + 手改坏的参数"会直接打挂进程。参数必须被钳制。
+func TestVerifyPasswordRejectsDegenerateParams(t *testing.T) {
+	salt := b64.EncodeToString([]byte("0123456789abcdef"))
+	key := b64.EncodeToString([]byte("0123456789abcdef0123456789abcdef"))
+
+	degenerate := []struct {
+		name, phc string
+	}{
+		{"t=0", "$argon2id$v=19$m=19456,t=0,p=1$" + salt + "$" + key},
+		{"p=0", "$argon2id$v=19$m=19456,t=2,p=0$" + salt + "$" + key},
+		{"m 极大", "$argon2id$v=19$m=4000000,t=2,p=1$" + salt + "$" + key},
+		{"m=0", "$argon2id$v=19$m=0,t=2,p=1$" + salt + "$" + key},
+		{"参数不匹配常量", "$argon2id$v=19$m=8192,t=2,p=1$" + salt + "$" + key},
+		{"salt 为空", "$argon2id$v=19$m=19456,t=2,p=1$$" + key},
+		{"key 为空", "$argon2id$v=19$m=19456,t=2,p=1$" + salt + "$"},
+		{"算法不是 argon2id", "$argon2i$v=19$m=19456,t=2,p=1$" + salt + "$" + key},
+	}
+	for _, c := range degenerate {
+		t.Run(c.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("verifyPassword 不应 panic: %v", r)
+				}
+			}()
+			if verifyPassword(c.phc, "1234", "pepper") {
+				t.Fatal("退化参数不应验证通过")
+			}
+		})
+	}
+}
+
+// 配置里的参数被改坏后，登录必须优雅失败（401）而不是打挂进程。
+func TestAuthenticateSurvivesCorruptHashParams(t *testing.T) {
+	m := newTestManager(t)
+	if err := m.SetPassword("1234"); err != nil {
+		t.Fatal(err)
+	}
+
+	m.mu.Lock()
+	// 保留合法结构，只把 t 改成 0（argon2 会 panic 的值）
+	m.hash = strings.Replace(m.hash, "t=2", "t=0", 1)
+	m.mu.Unlock()
+
+	if _, err := m.Authenticate("1.2.3.4", "1234"); err == nil {
+		t.Fatal("参数被改坏后不应认证成功")
+	} else if err.Error() != "密码错误，请重试" {
+		t.Fatalf("应报普通密码错误，实际: %v", err)
+	}
+}
+
+func TestCloseIsIdempotent(t *testing.T) {
+	m, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Close()
+	m.Close() // 第二次不应 panic
+	m.Close()
+}
+
+// 开启密码保护时，保护关闭期间签发的 session 必须失效：
+// /auth 在关闭期间是免鉴权端点，任何人都能先拿一个 token 等着。
+func TestEnablingProtectionInvalidatesSessions(t *testing.T) {
+	m := newTestManager(t)
+	m.SetPassword("1234")
+
+	// 保护尚未启用时登录（此时 /auth 免鉴权，人人可达）
+	token, err := m.Authenticate("1.2.3.4", "1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.CheckWebAuth("session_token=" + token) {
+		t.Fatal("前置条件：token 此时应有效")
+	}
+
+	if err := m.SetPasswordEnabled(true); err != nil {
+		t.Fatal(err)
+	}
+	if m.CheckWebAuth("session_token=" + token) {
+		t.Fatal("开启保护后，此前签发的 session 必须失效")
+	}
+	// 重新登录后可用
+	token2, err := m.Authenticate("1.2.3.4", "1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.CheckWebAuth("session_token=" + token2) {
+		t.Fatal("重新登录后应有效")
+	}
+}
+
 func TestGenerateRandomPassword(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 50; i++ {

@@ -192,15 +192,58 @@ func ScanAndStore(st *state.AppState, folder string, cancel *atomic.Bool) (*mode
 	return &res.Report, nil
 }
 
-// isRootDirectory 判断给定路径是否为磁盘根目录（Windows: `X:\`、`\`、`/`；Unix: `/`）。
+// isRootDirectory 判断给定路径是否为磁盘/卷根目录。
+//
+// 拒绝根目录的理由是"扫描整个盘会耗时很久并卡住"，因此这里要覆盖各种等价写法，
+// 而不只是最直观的 `X:\`：
+//   - `X:`、`X:\`、`X:/`（驱动器相对与绝对）；
+//   - `\`、`/`（当前盘根）；
+//   - `\\server\share`、`\\server\share\`（UNC 共享根）；
+//   - `\\?\C:\`、`\\.\C:\`（扩展长度/设备前缀，浏览器与"复制路径"会产生）。
+//
+// 先 Normalize 再判断，避免 `C:\\`、`C:\Videos\..` 之类的写法绕过检查
+// （后者 Clean 后正好是 `C:\`，确实等于选了个盘根）。
 func isRootDirectory(p string) bool {
-	if runtime.GOOS == "windows" {
-		if p == "\\" || p == "/" {
+	if runtime.GOOS != "windows" {
+		return p == "/"
+	}
+
+	// 裸驱动器名（`C:`）：Clean 会把它变成 `C:.`（驱动器**相对**路径），
+	// 指向该盘的"当前目录"而非根。用户从选择框里拿不到这种值，
+	// 而它无法保证不是整盘，按根处理（宁严勿松）。
+	if len(p) == 2 && p[1] == ':' {
+		return true
+	}
+
+	p = filepath.Clean(p)
+	// 当前盘根：Clean 后是单个分隔符（`/` 也会被归一成 `\`）
+	if p == `\` {
+		return true
+	}
+
+	norm := strings.ReplaceAll(p, "/", `\`)
+
+	// 设备/扩展长度前缀：剥掉后递归判断剩余部分
+	for _, prefix := range []string{`\\?\`, `\\.\`} {
+		if len(norm) > len(prefix) && strings.HasPrefix(norm, prefix) {
+			return isRootDirectory(norm[len(prefix):])
+		}
+	}
+
+	// UNC：`\\server\share` 与 `\\server\share\` 都是共享根
+	// （Clean 会保留尾分隔符，因此先去掉再数层级）
+	if strings.HasPrefix(norm, `\\`) {
+		rest := strings.TrimSuffix(strings.TrimPrefix(norm, `\\`), `\`)
+		return strings.Count(rest, `\`) <= 1
+	}
+
+	// 驱动器绝对路径：`X:` 或 `X:\`（`C:.` 是上面已拦的驱动器相对形式）
+	if len(norm) >= 2 && norm[1] == ':' {
+		if len(norm) == 2 || norm == norm[:2]+`\` {
 			return true
 		}
-		return len(p) == 3 && p[1] == ':' && (p[2] == '\\' || p[2] == '/')
 	}
-	return p == "/"
+	return false
 }
 
 func formatModTime(t time.Time) string {

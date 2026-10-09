@@ -40,17 +40,37 @@ func (w *rotatingWriter) Write(p []byte) (int, error) {
 	if w.size+int64(len(p)) > constants.LogMaxFileSize {
 		w.rotate()
 	}
+	if w.f == nil {
+		// 轮转失败后没有可用文件：不能让 nil 解引用打挂写日志的调用方
+		return len(p), nil
+	}
 	n, err := w.f.Write(p)
 	w.size += int64(n)
 	return n, err
 }
 
+// rotate 把当前文件改名为 <name>.log.1 并重新打开 <name>.log。
+//
+// 失败处理必须谨慎：改名失败（旧轮转文件被编辑器/杀软占用，Windows 上 rename
+// 会直接失败）时**不能**把 size 归零——文件实际仍是超限大小，清零只会让下一次
+// 轮转推迟整整一个阈值。这里保留原 size，让后续每次写都重试轮转。
 func (w *rotatingWriter) rotate() {
 	w.f.Close()
-	os.Rename(w.path, w.path+".1") // 覆盖旧轮转文件，失败则放弃本次轮转
+	w.f = nil
+
+	if err := os.Rename(w.path, w.path+".1"); err != nil {
+		// 改名失败：尽量以追加方式继续写原文件，并保留 size 以便下次重试
+		f, openErr := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if openErr != nil {
+			return // 打不开就丢弃文件写入（控制台输出不受影响）
+		}
+		w.f = f
+		return
+	}
+
 	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
-		return // 打不开新文件时丢弃后续文件写入（控制台输出不受影响）
+		return
 	}
 	w.f = f
 	w.size = 0
@@ -94,8 +114,17 @@ func setup(dir, name, fallbackDir string) (closeFn func(), logPath string) {
 
 	out := io.MultiWriter(os.Stdout, file)
 	slog.SetDefault(slog.New(slog.NewTextHandler(out, nil)))
-	return func() {
-		file.f.Sync()
-		file.f.Close()
-	}, path
+	return file.close, path
+}
+
+// close 刷盘并关闭底层文件；幂等，且容忍"轮转失败后没有文件"的状态。
+func (w *rotatingWriter) close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.f == nil {
+		return
+	}
+	w.f.Sync()
+	w.f.Close()
+	w.f = nil
 }

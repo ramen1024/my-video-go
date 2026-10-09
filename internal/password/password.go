@@ -74,6 +74,7 @@ type Manager struct {
 	sessions map[string]time.Time // token → 过期时刻
 
 	stopCleanup chan struct{}
+	closeOnce   sync.Once
 }
 
 // New 从 dir/password_config.json 加载配置（文件不存在或损坏时回退默认值）；
@@ -98,8 +99,9 @@ func New(dir string) (*Manager, error) {
 }
 
 // Close 停掉后台清理线程（进程退出前调用）。
+// 幂等：重复调用不会 panic（其余 Stop/Close 也都是幂等的）。
 func (m *Manager) Close() {
-	close(m.stopCleanup)
+	m.closeOnce.Do(func() { close(m.stopCleanup) })
 }
 
 func (m *Manager) configPath() string {
@@ -197,11 +199,18 @@ func (m *Manager) Enabled() bool {
 }
 
 // SetPasswordEnabled 启用/禁用密码保护。启用前提是已设置密码。
+//
+// 启用时清空已有 session：保护关闭期间 /auth 仍是免鉴权端点，任何能连上
+// 共享端口的人都能先拿到一个 token，等用户开启保护后继续用——这些 token
+// 必须先失效，"开启保护"才真正等于"要求重新登录"。
 func (m *Manager) SetPasswordEnabled(enabled bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if enabled && m.hash == "" {
 		return apperr.PasswordError("请先设置密码再启用密码保护")
+	}
+	if enabled {
+		m.clearSessions()
 	}
 	m.enabled.Store(enabled)
 	m.saveConfigLocked()
@@ -409,6 +418,12 @@ func hashPassword(password, pepper string) string {
 }
 
 // verifyPassword 解析 PHC 串并重算哈希做常数时间比较。
+//
+// PHC 串里的 m/t/p 来自配置文件，**不可信**：argon2.IDKey 对越界参数会 panic
+// （t=0 → "number of rounds too small"、p=0 → "parallelism degree too low"），
+// 而 loadConfig 只校验 JSON 合法性、不校验 PHC 内容。人手工改坏配置或磁盘
+// 损坏都会让每次登录 panic（整个进程挂掉），m 被改成天文数字还会尝试分配
+// 巨量内存。因此这里只接受与编译期常量完全一致的参数。
 func verifyPassword(phc, password, pepper string) bool {
 	parts := strings.Split(phc, "$")
 	// 期望形如: ["", "argon2id", "v=19", "m=19456,t=2,p=1", salt, key]
@@ -419,12 +434,15 @@ func verifyPassword(phc, password, pepper string) bool {
 	if _, err := fmt.Sscanf(parts[3], "m=%d,t=%d,p=%d", &mem, &iters, &parallel); err != nil {
 		return false
 	}
+	if mem != argonMemoryKiB || iters != argonTimeCost || parallel != argonThreads {
+		return false
+	}
 	salt, err := b64.DecodeString(parts[4])
-	if err != nil {
+	if err != nil || len(salt) == 0 {
 		return false
 	}
 	want, err := b64.DecodeString(parts[5])
-	if err != nil {
+	if err != nil || len(want) == 0 {
 		return false
 	}
 	got := argon2.IDKey([]byte(password+pepper), salt, iters, mem, uint8(parallel), uint32(len(want)))
