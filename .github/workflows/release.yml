@@ -26,7 +26,9 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: stable
+          # 与 ci.yml 一致：必须钉死（理由见 ci.yml 的注释——staticcheck 读的
+          # 编译器导出数据格式随 Go 版本递增），且 wails build 用同一工具链
+          go-version: '1.27.1'
           cache: true
 
       - name: 安装前端依赖

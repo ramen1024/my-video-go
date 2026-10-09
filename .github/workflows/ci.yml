@@ -26,7 +26,14 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: stable
+          # 必须钉死，不能用 stable：staticcheck 靠读取编译器导出数据工作，
+          # 该格式随 Go 版本递增（本机 1.27.1 产出 v4，更新的 Go 产出 v5，
+          # 超出 staticcheck v0.8.1 的支持范围直接报
+          # "export data version 5 is greater than maximum supported version 4"）。
+          # 同时 wails build 用的也是这个 Go——钉死它才能保证任何人、任何时间
+          # 跑 CI 都得到同一结果。升级 Go 时必须连 staticcheck 版本一起升，
+          # 并先在本地确认 `go run ...@<新版> ./...` 清零告警。
+          go-version: '1.27.1'
           cache: true
 
       - name: 安装前端依赖
@@ -51,8 +58,9 @@ jobs:
 
       # staticcheck 是 AGENTS.md 里"clippy 等价物"的答案。用 go run 免安装、
       # 且把版本钉死，避免某次 CI 升级工具后冒出一批新告警导致全库红。
-      # 版本升级是显式动作：本地跑 `go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...`
+      # 版本升级是显式动作：本地跑 `go run honnef.co/go/tools/cmd/staticcheck@<新版> ./...`
       # 清零告警后，再改这里的版本号。
+      # 注意它必须与上方 go-version 配对升级（详见 ci.yml 的 setup-go 注释）。
       - name: staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 

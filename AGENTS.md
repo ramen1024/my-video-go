@@ -230,6 +230,15 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   CI 升级工具后冒出全库新告警；升级版本是显式动作——本地清零告警后再改这个号）。
   `-race` 需要 gcc（CGO），本机与 CI 的 windows-latest 都没装，跑不了；
   并发正确性目前只能靠逻辑测试与静态审查。
+- **CI 的 Go 版本必须钉死，不能用 `stable`**（`setup-go` 的 `go-version: '1.27.1'`）。
+  教训：staticcheck 靠读取**编译器导出数据**工作，该格式随 Go 版本递增——
+  本机 1.27.1 产出 v4、staticcheck v0.8.1 支持到 v4，本地全绿；
+  而 CI 当时用 `stable`（更新的 Go）产出 v5，直接报
+  `export data version 5 is greater than maximum supported version 4`。
+  "本地能过"不代表 CI 能过，只要两边工具链版本不同。钉死 Go 还有一个理由：
+  `wails build` 用的是同一个工具链，钉死才能保证任何人、任何时间跑 CI 结果一致。
+  **升级 Go 的步骤**：先本地装新 Go → 升 staticcheck 到兼容版 → `./...` 清零告警 →
+  再同时改 `go-version` 与 staticcheck 版本号（两个文件都要改）。
 
 ## Windows-specific
 
