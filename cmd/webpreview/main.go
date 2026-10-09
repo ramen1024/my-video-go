@@ -54,5 +54,7 @@ func setupTempLogging() func() {
 	if err != nil {
 		return func() {}
 	}
-	return logging.Setup(dir, "preview")
+	// 第二个返回值是日志实际路径；预览工具跑在控制台里，不需要展示给用户
+	closeFn, _ := logging.Setup(dir, "preview")
+	return closeFn
 }

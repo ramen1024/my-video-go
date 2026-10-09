@@ -57,21 +57,35 @@ func (w *rotatingWriter) rotate() {
 }
 
 // Setup 初始化 slog 默认 logger，返回关闭函数（进程退出前调用以刷盘）。
-// 文件打开失败时降级为仅控制台输出，不影响启动。
-func Setup(dir, name string) func() {
+//
+// 本应用是 GUI 程序：一旦日志文件打不开，降级到"仅控制台输出"等于把诊断信息
+// 丢进虚空——用户只会看到"双击没反应"。因此这里会再退一步到 %TEMP%，并把
+// 最终生效的路径回报给调用方（启动失败时要告诉用户去哪看日志）。
+//
+// 返回的 LogPath 在日志不可用时为空串。
+func Setup(dir, name string) (closeFn func(), logPath string) {
 	path := filepath.Join(dir, name+".log")
-	var out io.Writer = os.Stdout
 	file, err := newRotatingWriter(path)
 	if err != nil {
-		slog.Error("日志文件打开失败，降级为仅控制台输出", "path", path, "err", err)
-	} else {
-		out = io.MultiWriter(os.Stdout, file)
-	}
-	slog.SetDefault(slog.New(slog.NewTextHandler(out, nil)))
-	return func() {
-		if file != nil {
-			file.f.Sync()
-			file.f.Close()
+		// 首选路径失败（目录权限不足/被占用）：退到 %TEMP%
+		fallback := filepath.Join(os.TempDir(), name+".log")
+		slog.Error("日志文件打开失败，尝试回退到临时目录",
+			"path", path, "err", err, "fallback", fallback)
+		path = fallback
+		file, err = newRotatingWriter(path)
+		if err != nil {
+			// %TEMP% 也不行：只能退回控制台（此时启动失败会走 MessageBox 兜底）
+			slog.Error("临时目录日志也不可写，降级为仅控制台输出",
+				"path", path, "err", err)
+			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
+			return func() {}, ""
 		}
 	}
+
+	out := io.MultiWriter(os.Stdout, file)
+	slog.SetDefault(slog.New(slog.NewTextHandler(out, nil)))
+	return func() {
+		file.f.Sync()
+		file.f.Close()
+	}, path
 }

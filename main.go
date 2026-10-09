@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"my-video-go/internal/logging"
@@ -22,27 +23,24 @@ import (
 var assets embed.FS
 
 func main() {
-	closeLog := setupLogging()
+	closeLog, logPath := setupLogging()
 	defer closeLog()
 
 	dataDir := appDataDir()
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
-		slog.Error("创建数据目录失败", "dir", dataDir, "err", err)
-		os.Exit(1)
+		showFatalError(logPath, fmt.Errorf("无法创建数据目录 %s：%w", dataDir, err))
 	}
 
 	pw, err := password.New(dataDir)
 	if err != nil {
-		slog.Error("初始化密码模块失败", "err", err)
-		os.Exit(1)
+		showFatalError(logPath, fmt.Errorf("初始化密码模块失败：%w", err))
 	}
 	defer pw.Close()
 
 	st := state.New()
 	dist, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
-		slog.Error("定位前端产物失败", "err", err)
-		os.Exit(1)
+		showFatalError(logPath, fmt.Errorf("前端资源缺失，请重新安装：%w", err))
 	}
 	shareServer := share.New(st, pw, dist)
 	app := NewApp(st, pw, shareServer)
@@ -77,15 +75,21 @@ func main() {
 		},
 	})
 	if err != nil {
-		slog.Error("应用退出", "err", err)
+		// 走到这里说明窗口没能建起来（最常见是 WebView2 运行时缺失/被占用）。
+		// 不弹窗的话用户只会看到"双击没反应"，无从判断发生了什么。
+		showFatalError(logPath, fmt.Errorf("应用窗口创建失败：%w\n\n"+
+			"若近期安装过其他软件或更新过系统，可尝试重启后再次运行；"+
+			"仍失败请检查 WebView2 运行时是否可用", err))
 	}
 }
 
-// setupLogging 初始化双写日志，返回关闭函数；目录创建失败时仅控制台输出。
-func setupLogging() func() {
+// setupLogging 初始化双写日志，返回关闭函数与实际生效的日志路径。
+// 目录创建失败时 logging.Setup 会自行回退到 %TEMP%；两处都不可用时
+// 返回空路径，showFatalError 会相应调整提示文案。
+func setupLogging() (func(), string) {
 	dir := appDataDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return func() {}
+		slog.Error("创建日志目录失败，交给 logging.Setup 回退", "dir", dir, "err", err)
 	}
 	return logging.Setup(dir, "video-scanner")
 }
