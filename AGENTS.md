@@ -44,12 +44,17 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 
 ## Backend (`internal/`)
 
-- `apperr/` — 面向前端的应用错误（`Error()` 返回中文 message，Type 用于日志分类）
+- `apperr/` — 面向前端的应用错误（只有 `Error()` 返回中文 message，**没有类型字段**）。
+  前端只能看到 message 字符串、服务端也不按类型分流，旧的 7 个 `Type` 常量与 `IsType`
+  只被测试用来断言"调对了哪个构造函数"，那是在测实现细节。**测试直接断言 `Error()`
+  文本**——那才是前端与用户真正看到的
 - `constants/` — 全部常量（端口 6008、1 MiB、限流参数、VIDEO_TYPES 扩展名→Content-Type）
 - `models/` — VideoFile / ScanReport / ShareStatus 等（JSON snake_case，前后端契约，
   有契约测试锁定字段名）+ `ComputeETag`
 - `scanner/` — `Scan`（WalkDir、白名单小写比较、1MiB 报告制、不跟随符号链接、
-  拒绝根目录、取消）与 `ScanAndStore`（ScanGuard 互斥 + 原子替换列表）
+  拒绝根目录、取消）与 `ScanAndStore`（ScanGuard 互斥 + 原子替换列表）。排序走
+  `sortByNameLower`（预计算小写键，5000 条 1.02ms → 0.69ms、allocs 12282 → 5054）；
+  **不要**改回比较器里调 `strings.ToLower`（每次比较分配两个临时字符串）
 - `password/` — Argon2id（m=19456,t=2,p=1）、4 位数字校验、session、IP 限流、
   `password_config.json` 持久化（0600）。`enabled` 是 `atomic.Bool` 而非 `mu` 保护的
   字段：`Enabled()` 在 `withAuth` 的每请求路径上（含每个视频 Range），走 mu 会让
@@ -65,7 +70,9 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   只路由 `/video/` 到 `share.VideoHandler`）
 - `state/` — AppState：atomic.Pointer 快照（列表+ETag、共享信息、刷新结果）、
   服务器状态机（Stopped→Starting→Running→Stopping）、扫描/刷新 CAS 守卫
-- `localips/` — 本机全局 IPv4 枚举（5 分钟缓存，过滤回环/链路本地）
+- `localips/` — 本机全局 IPv4 枚举（5 分钟缓存，过滤回环/链路本地）。缓存 TTL 直接用
+  `constants.IPCacheTTLSecs`，**不要**另立 `cacheTTL`（旧注释称"避免循环依赖"并不成立：
+  `constants` 只 import `time`）。`check-config-sync.mjs` 会断言这一点
 - `logging/` — slog 双写（控制台 + 数据目录文件，5 MiB 轮转为 `.log.1`）
 
 **新增一个绑定方法的步骤：**

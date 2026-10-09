@@ -104,9 +104,6 @@ func (s *Server) Stop() error {
 	return err
 }
 
-// Port 返回实际监听的端口（未启动时为 0）。
-func (s *Server) Port() int { return s.port }
-
 // Handler 组装完整请求处理链：安全头 → Host 校验（防 DNS rebinding）→
 // 会话鉴权 → 路由。桌面端资产中间件只复用其中的路由部分。
 //

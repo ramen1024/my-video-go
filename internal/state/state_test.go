@@ -1,7 +1,6 @@
 package state
 
 import (
-	"my-video-go/internal/apperr"
 	"my-video-go/internal/models"
 	"testing"
 )
@@ -35,7 +34,7 @@ func TestServerStateMachineRejections(t *testing.T) {
 	st.srvState = StateStopping
 	st.srvMu.Unlock()
 	err := st.StartServerStarting()
-	if !apperr.IsType(err, apperr.TypeOther) || err.Error() != "服务器正在停止中，请稍后" {
+	if err == nil || err.Error() != "服务器正在停止中，请稍后" {
 		t.Fatalf("Stopping 时启动应被拒: %v", err)
 	}
 
@@ -45,18 +44,18 @@ func TestServerStateMachineRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 	err = st.StartServerStarting()
-	if !apperr.IsType(err, apperr.TypeServerAlreadyRunning) || err.Error() != "服务器已在运行" {
+	if err == nil || err.Error() != "服务器已在运行" {
 		t.Fatalf("Starting 时启动应报\"服务器已在运行\": %v", err)
 	}
 	err = st.StartServerStopping()
-	if !apperr.IsType(err, apperr.TypeOther) || err.Error() != "服务器正在启动中，请稍后" {
+	if err == nil || err.Error() != "服务器正在启动中，请稍后" {
 		t.Fatalf("Starting 时停止应被拒: %v", err)
 	}
 	st.SetServerStopped()
 
 	// Stopped 状态拒绝停止
 	err = st.StartServerStopping()
-	if !apperr.IsType(err, apperr.TypeServerNotRunning) || err.Error() != "服务器未运行" {
+	if err == nil || err.Error() != "服务器未运行" {
 		t.Fatalf("Stopped 时停止应报\"服务器未运行\": %v", err)
 	}
 }

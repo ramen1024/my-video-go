@@ -2,12 +2,15 @@
 package localips
 
 import (
+	"my-video-go/internal/constants"
 	"net"
 	"sync"
 	"time"
 )
 
-const cacheTTL = 300 * time.Second // constants.IPCacheTTLSecs，独立包避免循环依赖故本地声明
+// cacheTTL 直接复用 constants.IPCacheTTLSecs，不另立常量。
+// （原注释称"避免循环依赖"并不成立：constants 只 import "time"。）
+const cacheTTL = constants.IPCacheTTLSecs * time.Second
 
 var (
 	mu      sync.Mutex

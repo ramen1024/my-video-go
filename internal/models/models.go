@@ -7,7 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"hash"
+	"io"
 	"my-video-go/internal/constants"
 )
 
@@ -75,8 +75,12 @@ type PasswordStatus struct {
 // ComputeETag 计算视频列表的稳定指纹（sha256 小写 hex，不含引号）。
 // HTTP 层使用时外层再包一对引号。0xFF 分隔符防止字段拼接歧义
 // （"ab"+"c" 与 "a"+"bc" 必须产生不同指纹）。
+//
+// 用 io.WriteString 而非 h.Write([]byte(s))：后者每个字符串字段都要
+// 分配一个临时切片（2000 条列表 = 2000 次多余分配），前者对 hash.Hash
+// 有 io.StringWriter 快路径，零分配。
 func ComputeETag(videos []VideoFile) string {
-	var h hash.Hash = sha256.New()
+	h := sha256.New()
 	var buf [8]byte
 	putUint64 := func(n uint64) {
 		binary.BigEndian.PutUint64(buf[:], n)
@@ -84,11 +88,11 @@ func ComputeETag(videos []VideoFile) string {
 	}
 	putUint64(uint64(len(videos)))
 	for _, v := range videos {
-		h.Write([]byte(v.RelativePath))
+		io.WriteString(h, v.RelativePath)
 		h.Write([]byte{0xFF})
 		putUint64(uint64(v.Size))
 		h.Write([]byte{0xFF})
-		h.Write([]byte(v.Modified))
+		io.WriteString(h, v.Modified)
 		h.Write([]byte{0xFF})
 	}
 	return hex.EncodeToString(h.Sum(nil))

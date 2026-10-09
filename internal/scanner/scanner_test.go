@@ -1,7 +1,6 @@
 package scanner
 
 import (
-	"my-video-go/internal/apperr"
 	"my-video-go/internal/models"
 	"my-video-go/internal/state"
 	"os"
@@ -108,7 +107,8 @@ func TestScanRejectsRootDirectory(t *testing.T) {
 		t.Fatal("C:\\ 应被判定为磁盘根目录")
 	}
 	_, err := Scan(`C:\`, nil)
-	if !apperr.IsType(err, apperr.TypeInvalidPath) || !strings.Contains(err.Error(), "根目录") {
+	// 断言 Error() 文本而非错误类型：前端与用户能看到的只有这句话
+	if err == nil || !strings.Contains(err.Error(), "根目录") {
 		t.Fatalf("扫描根目录应返回根目录警告: %v", err)
 	}
 }
@@ -120,7 +120,7 @@ func TestScanCancelled(t *testing.T) {
 	var cancel atomic.Bool
 	cancel.Store(true)
 	_, err := Scan(dir, &cancel)
-	if !apperr.IsType(err, apperr.TypeScanCancelled) || err.Error() != "扫描已取消" {
+	if err == nil || err.Error() != "扫描已取消" {
 		t.Fatalf("应返回扫描已取消: %v", err)
 	}
 }
@@ -140,7 +140,7 @@ func TestScanAndStoreCancelledKeepsOldList(t *testing.T) {
 	var myCancel atomic.Bool
 	myCancel.Store(true)
 	_, err := ScanAndStore(st, dir2, &myCancel)
-	if !apperr.IsType(err, apperr.TypeScanCancelled) {
+	if err == nil || err.Error() != "扫描已取消" {
 		t.Fatalf("应返回扫描已取消: %v", err)
 	}
 	if got := st.FolderPath(); got != dir {
@@ -160,7 +160,7 @@ func TestScanAndStoreFailureKeepsOldList(t *testing.T) {
 		t.Fatalf("首次扫描失败: %v", err)
 	}
 	_, err := ScanAndStore(st, filepath.Join(dir, "不存在"), nil)
-	if !apperr.IsType(err, apperr.TypeInvalidPath) {
+	if err == nil || !strings.Contains(err.Error(), "文件夹不存在") {
 		t.Fatalf("应返回路径错误: %v", err)
 	}
 	if list := st.Videos(); list == nil || len(list.Videos) != 1 {
@@ -232,13 +232,13 @@ func TestScanAndStoreGuardAndState(t *testing.T) {
 
 func TestScanMissingAndNotDir(t *testing.T) {
 	_, err := Scan(filepath.Join(t.TempDir(), "不存在"), nil)
-	if !apperr.IsType(err, apperr.TypeInvalidPath) || err.Error() != "文件夹不存在" {
+	if err == nil || err.Error() != "文件夹不存在" {
 		t.Fatalf("期望\"文件夹不存在\": %v", err)
 	}
 	file := filepath.Join(t.TempDir(), "f.txt")
 	os.WriteFile(file, []byte("x"), 0o644)
 	_, err = Scan(file, nil)
-	if !apperr.IsType(err, apperr.TypeInvalidPath) || err.Error() != "路径不是文件夹" {
+	if err == nil || err.Error() != "路径不是文件夹" {
 		t.Fatalf("期望\"路径不是文件夹\": %v", err)
 	}
 }

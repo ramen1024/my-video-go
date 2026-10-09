@@ -78,7 +78,28 @@ for (const [tsName, goName] of pairs) {
   }
 }
 
+// ---------- 3. IP 缓存 TTL：localips 必须复用 constants，不得另立常量 ----------
+
+// 曾在这里声明过一份 `cacheTTL = 300`，注释理由是"避免循环依赖"——并不成立
+// （constants 只依赖 time）。重复常量没有断言守护，已经漂移过一次。
+//
+// 必须匹配**代码**而非全文：注释里提到常量名会让全文匹配永远为真，
+// 断言就成了摆设（这是第一版的实际失败）。
+const localipsGo = readFileSync(join(root, "internal/localips/localips.go"), "utf8");
+const cacheTTLDecl = localipsGo.match(
+  /^const\s+cacheTTL\s*=\s*(.+)$/m,
+);
+if (!cacheTTLDecl) {
+  fail("internal/localips/localips.go 中找不到 cacheTTL 声明");
+}
+if (!/constants\.IPCacheTTLSecs/.test(cacheTTLDecl[1])) {
+  fail(
+    `localips.cacheTTL 必须复用 constants.IPCacheTTLSecs，实际为 ${cacheTTLDecl[1].trim()}` +
+      "（constants 不依赖本包，不存在循环依赖）",
+  );
+}
+
 console.log(
   `✓ 配置一致性校验通过：INLINE(${inlineExts.length}) ⊆ VIDEO_TYPES(${videoExts.length})，` +
-    `端口/体积常量一致`,
+    `端口/体积常量一致，IP 缓存 TTL 单一来源`,
 );
