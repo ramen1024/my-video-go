@@ -33,13 +33,24 @@ func (h VideoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 扩展名按**请求路径**判定，且必须先于"是否已设置共享目录"：
+	//   - 省掉打开文件才发现不是视频的 wasted open；
+	//   - 非视频请求**一律** 403，不因共享目录是否存在/文件是否存在而在
+	//     403/404 之间变化，避免用状态码探测"某文件在不在这里"。
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(rel), "."))
+	if !constants.IsSupportedVideoExtension(ext) {
+		writeText(w, http.StatusForbidden, "Access denied: not a supported video file")
+		return
+	}
+
 	folder := h.State.FolderPath()
 	if folder == "" {
 		writeText(w, http.StatusNotFound, "File not found")
 		return
 	}
-	// 每请求开一次 Root（108µs）而非缓存（57µs）：缓存会在 Windows 上长期
-	// 持有目录句柄，导致用户无法重命名/删除正在共享的视频目录——不值得。
+	// 每请求开一次 Root（108µs）而非缓存（57µs）：真正的理由是不缓存会在 Windows 上
+	// 长期持有目录句柄，导致用户无法重命名/删除正在共享的视频目录（108µs vs 57µs
+	// 的差距无关紧要，不值得为此换回缓存）。
 	root, err := os.OpenRoot(folder)
 	if err != nil {
 		// 目录已删除或不可访问
@@ -47,14 +58,6 @@ func (h VideoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer root.Close()
-
-	// 扩展名先按**请求路径**判定：省掉打开文件才发现不是视频的 wasted open，
-	// 也让非视频请求统一得到 403（而不是因不存在而 404，暴露探测差异）。
-	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(rel), "."))
-	if !constants.IsSupportedVideoExtension(ext) {
-		writeText(w, http.StatusForbidden, "Access denied: not a supported video file")
-		return
-	}
 
 	f, err := root.Open(rel)
 	if err != nil {
@@ -79,13 +82,24 @@ func (h VideoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
 }
 
+// errPathEscapesText 是 os.Root 表达"逃出父目录"的错误文本。
+// 标准库用包内未导出的 errPathEscapes 承载它，无法 errors.Is 匹配。
+const errPathEscapesText = "path escapes from parent"
+
 // isPathEscape 判断错误是否为"路径逃出共享目录"。
 //
-// os.Root 用包内未导出的 errPathEscapes（"path escapes from parent"）表达
-// 穿越与绝对符号链接，无法用 errors.Is 匹配，只能匹配错误文本。
-// 这是与标准库内部实现耦合的一处，升级 Go 时值得用测试复核。
+// 只比对 *os.PathError.Err 这一层：**不能**对整条错误做 strings.Contains——
+// 错误文本里含被请求的文件名，于是名为 "escapes from parent.mp4" 的普通文件
+// 在**不存在**时会被误判为穿越，返回 403 而不是 404。
+//
+// 这是与标准库内部实现耦合的一处，升级 Go 时要用
+// TestVideoEscapeAttemptsStillForbidden 复核。
 func isPathEscape(err error) bool {
-	return strings.Contains(err.Error(), "escapes from parent")
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err.Error() == errPathEscapesText
+	}
+	return err.Error() == errPathEscapesText
 }
 
 // ResolveVideoPath 把相对路径解析到 folder 内的真实绝对路径。

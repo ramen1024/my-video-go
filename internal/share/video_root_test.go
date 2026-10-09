@@ -76,6 +76,51 @@ func TestVideoExtensionCheckUsesRequestPath(t *testing.T) {
 	}
 }
 
+// 非视频扩展名一律 403，**与共享目录是否已设置无关**：之前先判 folder，
+// 未设置共享目录时所有请求（含 .txt）都成了 404，等于用状态码暴露了
+// "当前没有共享"。扩展名检查必须排在 folder 检查之前。
+func TestVideoExtensionCheckBeforeFolderCheck(t *testing.T) {
+	s, _ := newTestServer(t, false) // 刻意不设置共享目录
+
+	for _, target := range []string{"/video/secret.txt", "/video/x.db", "/video/a.b.c.json"} {
+		w := doReq(s, "GET", target, "", "", nil)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("未设置共享目录时 %s 仍应 403（不能因未共享而变 404），实际 %d %q",
+				target, w.Code, w.Body.String())
+		}
+	}
+	// 白名单扩展名在未设置目录时仍是 404：与"文件不存在"不可区分，不泄露信息
+	for _, target := range []string{"/video/x.mp4", "/video/y.mkv"} {
+		w := doReq(s, "GET", target, "", "", nil)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("未设置共享目录时 %s 应 404，实际 %d", target, w.Code)
+		}
+	}
+}
+
+// 名为 "escapes from parent.mp4" 的普通文件（Windows 合法文件名）不存在时
+// 必须是 404：旧实现用 strings.Contains 匹配整条错误文本，而错误文本里含
+// 文件名，于是被误判为路径穿越而返回 403。
+func TestVideoFilenameContainingEscapeTextIsNotFound(t *testing.T) {
+	dir := t.TempDir()
+	makeVideo(t, filepath.Join(dir, "real.mp4"), 2*mib)
+	s, st := newTestServer(t, false)
+	st.SetFolderPath(dir)
+
+	// 不存在 → 404（而非被误判成穿越的 403）
+	w := doReq(s, "GET", "/video/escapes%20from%20parent.mp4", "", "", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("含 escape 文案的同名文件不存在时应 404，实际 %d %q", w.Code, w.Body.String())
+	}
+
+	// 真实存在则可正常播放（该名字不该被特殊对待）
+	makeVideo(t, filepath.Join(dir, "escapes from parent.mp4"), 2*mib)
+	w = doReq(s, "GET", "/video/escapes%20from%20parent.mp4", "", "", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("真实存在的含 escape 文案的同名文件应可播放，实际 %d", w.Code)
+	}
+}
+
 // 目录被删除后 /video/* 应优雅降级为 404，而不是 panic 或 500
 func TestVideoAfterFolderDeleted(t *testing.T) {
 	dir := t.TempDir()

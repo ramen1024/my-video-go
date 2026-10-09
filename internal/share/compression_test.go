@@ -246,6 +246,39 @@ func TestGzipHandles401PlainText(t *testing.T) {
 	}
 }
 
+// Vary 必须无条件写在**所有**走白名单路径的响应上，包括不压缩的那次。
+//
+// 之前只在 acceptsGzip 为真时才写，于是不带 Accept-Encoding 的响应没有 Vary——
+// 中间缓存会把它当成"两种客户端通用"的表示，正好造成本中间件要防的串味。
+func TestGzipVaryOnUncompressedResponse(t *testing.T) {
+	s, st := newTestServer(t, false)
+	fillList(st, 10)
+
+	// 不带 Accept-Encoding：不压缩，但必须有 Vary
+	w := doReq(s, "GET", "/videos", "", "", nil)
+	if w.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("不该压缩: %q", w.Header().Get("Content-Encoding"))
+	}
+	if !strings.Contains(w.Header().Get("Vary"), "Accept-Encoding") {
+		t.Fatalf("未压缩响应同样需要 Vary（否则中间缓存会串味）: %q", w.Header().Get("Vary"))
+	}
+
+	// 显式拒绝 gzip：同上
+	w = doReq(s, "GET", "/videos", "", "", map[string]string{"Accept-Encoding": "gzip;q=0"})
+	if w.Header().Get("Content-Encoding") != "" {
+		t.Fatalf("q=0 不该压缩: %q", w.Header().Get("Content-Encoding"))
+	}
+	if !strings.Contains(w.Header().Get("Vary"), "Accept-Encoding") {
+		t.Fatalf("q=0 响应同样需要 Vary: %q", w.Header().Get("Vary"))
+	}
+
+	// 不在白名单内的路径不该凭空多出 Vary（视频流与静态资源的表示不随编码变化）
+	vw := doReq(s, "GET", "/assets/app-abc123.js", "", "", nil)
+	if vw.Header().Get("Vary") != "" {
+		t.Fatalf("非白名单路径不应声明 Vary: %q", vw.Header().Get("Vary"))
+	}
+}
+
 func TestAcceptsGzipParsing(t *testing.T) {
 	cases := []struct {
 		header string

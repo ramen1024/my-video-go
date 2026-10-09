@@ -4,10 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"my-video-go/internal/constants"
 	"my-video-go/internal/password"
 	"net"
 	"net/http"
+	"time"
 )
 
 // authRequest 是 POST /auth 的请求体。
@@ -21,6 +23,14 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 	s.pw.CleanupOnce()
 
 	w.Header().Set("Cache-Control", "no-store")
+	// /auth 是免鉴权端点，局域网内任何设备都能到达，且 ReadHeaderTimeout 只管
+	// 请求头。没有读超时的话，"发完头就不发体"的客户端能让 io.ReadAll 永久阻塞，
+	// 每个这样的连接白占一个 goroutine + 一个 socket。
+	if rc := http.NewResponseController(w); rc != nil {
+		if err := rc.SetReadDeadline(time.Now().Add(constants.AuthBodyReadTimeout)); err != nil {
+			slog.Debug("设置 /auth 读超时失败（不阻断鉴权）", "err", err)
+		}
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, constants.MaxAuthBodySizeBytes+1)
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -30,6 +40,7 @@ func (s *Server) handleAuth(w http.ResponseWriter, r *http.Request) {
 				map[string]any{"success": false, "message": "请求体过大"})
 			return
 		}
+		// 超时与半途断开都归到这里：不区分文案，前端只提示重试
 		writeJSON(w, http.StatusBadRequest,
 			map[string]any{"success": false, "message": "读取请求体失败"})
 		return

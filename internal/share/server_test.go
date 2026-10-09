@@ -2,10 +2,13 @@ package share
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
+	"my-video-go/internal/constants"
 	"my-video-go/internal/models"
 	"my-video-go/internal/password"
 	"my-video-go/internal/state"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -548,6 +551,46 @@ func TestStaticAssetsCaching(t *testing.T) {
 	}
 }
 
+// /auth 免鉴权、局域网任意设备可达，而 ReadHeaderTimeout 只管请求头。
+// 发完头就不发体的客户端必须被 AuthBodyReadTimeout 掐断，否则每个连接
+// 都能白占一个 goroutine + 一个 socket。
+func TestAuthStalledBodyIsTimedOut(t *testing.T) {
+	s, _ := newTestServer(t, true)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	// 手工发头、声明 Content-Length 但不发体，模拟"吊住"的客户端
+	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+
+	if _, err := fmt.Fprintf(conn, "POST /auth HTTP/1.1\r\n"+
+		"Host: 127.0.0.1\r\n"+
+		"Content-Type: application/json\r\n"+
+		"Content-Length: 100\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 服务端应在超时后回应，而不是永久挂住
+	if err := conn.SetReadDeadline(time.Now().Add(constants.AuthBodyReadTimeout + 5*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 256)
+	n, err := conn.Read(buf)
+	if err != nil {
+		t.Fatalf("应在读超时后收到响应，实际读取失败: %v", err)
+	}
+	resp := string(buf[:n])
+	if !strings.Contains(resp, "HTTP/1.1") {
+		t.Fatalf("响应不像 HTTP: %q", resp)
+	}
+	if strings.Contains(resp, "200 OK") {
+		t.Fatalf("吊住的请求不该认证成功: %q", resp)
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	s, _ := newTestServer(t, false)
 	w := doReq(s, "GET", "/videos", "", "", nil)
@@ -590,6 +633,45 @@ func TestStartWithInvalidPort(t *testing.T) {
 		}
 		if strings.Contains(err.Error(), "%!") {
 			t.Fatalf("端口 %d 的错误文案含格式化残留: %q", port, err.Error())
+		}
+	}
+}
+
+// If-None-Match 必须支持规范里的 * 与逗号列表形式（不diff单值全等）。
+func TestVideosIfNoneMatchForms(t *testing.T) {
+	s, st := newTestServer(t, false)
+	st.SetVideos([]models.VideoFile{
+		{Name: "a.mp4", RelativePath: "a.mp4", Size: 2 * mib, Extension: "mp4"},
+	})
+	first := doReq(s, "GET", "/videos", "", "", nil)
+	etag := first.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("前置条件：应有 ETag")
+	}
+
+	hits := []string{
+		etag,                  // 单值
+		"*",                   // 通配：表示存在即命中
+		`"other", ` + etag,    // 列表：客户端缓存了多个副本
+		"W/" + etag,           // 弱校验符
+		` "other" ,  ` + etag, // 列表带空白
+	}
+	for _, inm := range hits {
+		w := doReq(s, "GET", "/videos", "", "", map[string]string{"If-None-Match": inm})
+		if w.Code != http.StatusNotModified {
+			t.Errorf("If-None-Match=%q 应 304，实际 %d", inm, w.Code)
+		}
+	}
+
+	misses := []string{"", `"other"`, `W/"other"`, `"a", "b"`}
+	for _, inm := range misses {
+		h := map[string]string{}
+		if inm != "" {
+			h["If-None-Match"] = inm
+		}
+		w := doReq(s, "GET", "/videos", "", "", h)
+		if w.Code != http.StatusOK {
+			t.Errorf("If-None-Match=%q 应 200，实际 %d", inm, w.Code)
 		}
 	}
 }

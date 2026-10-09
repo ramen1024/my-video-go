@@ -28,13 +28,21 @@ var gzipWriterPool = sync.Pool{
 // 或让带缓存的客户端拿压缩体却按未压缩长度解析。
 func withGzip(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !acceptsGzip(r) || !isGzipEligiblePath(r.URL.Path) {
+		if !isGzipEligiblePath(r.URL.Path) {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Vary 必须在任何 WriteHeader 之前写入，且 304 响应同样需要它，
-		// 否则客户端会拿旧缓存（未压缩表示）继续用。
+		// Vary 必须先于 acceptsGzip 判断写入：压缩与否由 Accept-Encoding 决定，
+		// 因此**两种表示**都要声明它。只在压缩分支上写，会让不带 Accept-Encoding
+		// 的那次响应缺失 Vary——中间缓存正好会把它当成"两种客户端通用"而串味，
+		// 这正是本中间件要防的情况。
+		// 同时它必须在任何 WriteHeader 之前写入，且 304 响应同样需要。
 		w.Header().Add("Vary", "Accept-Encoding")
+
+		if !acceptsGzip(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
 
 		gw := &gzipResponseWriter{ResponseWriter: w}
 		defer gw.close()

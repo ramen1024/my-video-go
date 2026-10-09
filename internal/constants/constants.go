@@ -38,6 +38,12 @@ const (
 	// MaxAuthBodySizeBytes 是 /auth 请求体上限，超出返回 413。
 	MaxAuthBodySizeBytes = 1024
 
+	// AuthBodyReadTimeout 是读取 /auth 请求体的上限。
+	// 只用于请求体（不设全局 ReadTimeout：视频流式响应可能持续很久）：
+	// /auth 免鉴权、局域网任意设备可达，没有它就能用"发完头不发体"的方式
+	// 无限占用 goroutine 与 socket。
+	AuthBodyReadTimeout = 5 * time.Second
+
 	// DefaultSharePort 是共享服务器的默认端口。
 	DefaultSharePort = 6008
 
