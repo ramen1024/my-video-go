@@ -657,6 +657,42 @@ func TestStopUnderLoadThenRestartable(t *testing.T) {
 	}
 }
 
+// /refresh 是改状态的请求，**所有**分支的响应都不该被缓存——
+// 此前只有 202 设置了 Cache-Control，429/400 都漏了。
+func TestRefreshAllBranchesNoStore(t *testing.T) {
+	s, st := newTestServer(t, false)
+
+	// 分支 1：未设置共享文件夹 → 400
+	w := doReq(s, "POST", "/refresh", "", "", nil)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("前置条件：应 400，实际 %d", w.Code)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("400 分支必须 no-store: %q", cc)
+	}
+
+	// 分支 2：冷却中 → 429
+	dir := t.TempDir()
+	makeVideo(t, filepath.Join(dir, "v.mp4"), 2*mib)
+	st.SetFolderPath(dir)
+	w = doReq(s, "POST", "/refresh", "", "", nil)
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("前置条件：应 202，实际 %d", w.Code)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("202 分支必须 no-store: %q", cc)
+	}
+	waitRefreshDone(t, st)
+
+	w = doReq(s, "POST", "/refresh", "", "", nil)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("前置条件：冷却中应 429，实际 %d", w.Code)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("429 分支必须 no-store: %q", cc)
+	}
+}
+
 func TestSecurityHeaders(t *testing.T) {
 	s, _ := newTestServer(t, false)
 	w := doReq(s, "GET", "/videos", "", "", nil)

@@ -13,6 +13,10 @@ import (
 // handleRefresh 触发网页端刷新：立即 202，后台线程扫描，结果由
 // /refresh-status 轮询获取。并发刷新与冷却期返回 429。
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
+	// 在**所有**分支的最前面设置：这是"改状态的请求"，任何一条响应
+	// （含 429/400）都不该被缓存。此前只有 202 那条设了，其余分支漏掉。
+	w.Header().Set("Cache-Control", "no-store")
+
 	if !s.st.BeginRefresh() {
 		writeJSON(w, http.StatusTooManyRequests,
 			map[string]any{"success": false, "message": "正在刷新中，请稍后"})
@@ -49,7 +53,6 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	// 冷却与扫描互不等待：固定 5 秒后解锁
 	time.AfterFunc(constants.RefreshCooldownSecs*time.Second, s.st.EndRefreshCooldown)
 
-	w.Header().Set("Cache-Control", "no-store")
 	writeJSON(w, http.StatusAccepted,
 		map[string]any{"success": true, "message": "刷新已开始"})
 }
