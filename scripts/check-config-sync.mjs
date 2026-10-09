@@ -49,6 +49,70 @@ if (!/启发式/.test(formatTs)) {
   fail("format.ts 必须保留\"启发式清单而非播放保证\"的说明（防止有人把它改成硬保证或 canPlayType 探测）");
 }
 
+// "守注释"不够：真正要禁的是把静态清单换成 canPlayType 探测。断言**代码**里不出现
+// 该调用，否则有人保留"启发式"三个字、同时改用 canPlayType，本检查会放行。
+//
+// 必须先剥掉注释：format.ts 的注释里正是在解释"为什么不要用 canPlayType"，
+// 不剥注释的话这条断言会把正确的注释判成违规（第一版就是这么失败的）。
+const formatTsCode = formatTs
+  .replace(/\/\*[\s\S]*?\*\//g, "") // 块注释
+  .replace(/(^|[^:])\/\/.*$/gm, "$1"); // 行注释（避开 https:// 这类）
+if (/\bcanPlayType\s*\(/.test(formatTsCode)) {
+  fail(
+    "format.ts 的**代码**中不应调用 canPlayType：内核按内容嗅探选择解封装器，" +
+      "canPlayType 只反映 MIME 声明，会给出假阴性（见该文件注释）",
+  );
+}
+
+// ---------- 1b. app.go 的绑定方法 ↔ desktop.ts 的 AppBindings ----------
+
+// AppBindings 是 desktop.ts 里**自声明**的接口，与 app.go 之间没有任何机器可查的
+// 联系：Go 侧改名后 TS 照样编译通过，svelte-check 抓不到，只在运行时炸
+// （"Wails 绑定不可用"或调用到 undefined）。这里按名字+参数个数比对两侧。
+const appGo = readFileSync(join(root, "app.go"), "utf8");
+const desktopTs = readFileSync(join(root, "frontend/src/lib/platform/desktop.ts"), "utf8");
+
+// app.go：`func (a *App) Name(args...) rets {`
+const goBindings = new Map();
+for (const m of appGo.matchAll(/^func\s+\(\w+\s+\*App\)\s+([A-Z]\w*)\s*\(([^)]*)\)/gm)) {
+  const params = m[2].trim();
+  const arity = params === "" ? 0 : params.split(",").length;
+  goBindings.set(m[1], arity);
+}
+
+// desktop.ts：接口体内的 `Name(args): Promise<...>;`
+const ifaceMatch = desktopTs.match(/interface\s+AppBindings\s*\{([\s\S]*?)\n\}/);
+if (!ifaceMatch) fail("desktop.ts 中找不到 AppBindings 接口");
+const tsBindings = new Map();
+for (const m of ifaceMatch[1].matchAll(/^\s*([A-Z]\w*)\s*\(([^)]*)\)\s*:/gm)) {
+  const params = m[2].trim();
+  const arity = params === "" ? 0 : params.split(",").length;
+  tsBindings.set(m[1], arity);
+}
+
+if (goBindings.size === 0) fail("app.go 中没解析到任何 App 绑定方法（正则或代码结构已变）");
+if (tsBindings.size === 0) fail("desktop.ts 的 AppBindings 中没解析到任何方法");
+
+const missingInTs = [...goBindings.keys()].filter((k) => !tsBindings.has(k));
+const missingInGo = [...tsBindings.keys()].filter((k) => !goBindings.has(k));
+if (missingInTs.length || missingInGo.length) {
+  fail(
+    "app.go 与 desktop.ts 的 AppBindings 方法集不一致：" +
+      (missingInTs.length ? `desktop.ts 缺 [${missingInTs.join(", ")}]；` : "") +
+      (missingInGo.length ? `app.go 缺 [${missingInGo.join(", ")}]；` : "") +
+      "改 Go 绑定方法后必须手工同步 AppBindings",
+  );
+}
+for (const [name, goArity] of goBindings) {
+  const tsArity = tsBindings.get(name);
+  if (tsArity !== goArity) {
+    fail(
+      `绑定方法 ${name} 的参数个数不一致：app.go 为 ${goArity}，desktop.ts 为 ${tsArity}` +
+        "（svelte-check 抓不到这类漂移）",
+    );
+  }
+}
+
 // ---------- 2. 端口与最小体积常量一致 ----------
 
 const configTs = readFileSync(join(root, "frontend/src/lib/config.ts"), "utf8");
@@ -135,5 +199,6 @@ if (changelogVersion !== productVersion) {
 
 console.log(
   `✓ 配置一致性校验通过：INLINE(${inlineExts.length}) ⊆ VIDEO_TYPES(${videoExts.length})，` +
-    `端口/体积常量一致，IP 缓存 TTL 单一来源，版本号 v${productVersion} 三处一致`,
+    `绑定方法 ${goBindings.size} 个两侧一致，端口/体积常量一致，IP 缓存 TTL 单一来源，` +
+    `版本号 v${productVersion} 三处一致`,
 );

@@ -2,3 +2,11 @@
 # core.autocrlf=true，检出时会把全部 .go 转成 CRLF，导致 gofmt -l 全量报红。
 # 此处显式锁定 LF，属性优先级高于 autocrlf 配置。
 *.go text eol=lf
+
+# 这两份 theme.css 必须逐字节相同（internal/share/theme.css 是 frontend 那份的
+# 副本，TestLoginTemplateInvariants 比对**工作区内容**）。
+# 它们目前恰好是同一个 blob、又都命中 *.css，所以保持一致；但只要将来出现按路径
+# 细分的规则，两者就可能被区别对待、测试莫名变红。这里钉死 LF，让不变量不再依赖
+# autocrlf 设置与通配符规则的巧合。
+frontend/src/lib/styles/theme.css text eol=lf
+internal/share/theme.css text eol=lf

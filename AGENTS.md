@@ -19,6 +19,10 @@ CI（`.github/workflows/ci.yml`）在 `windows-latest` 上运行：`pnpm install
 **`wails build` 必须在 `pnpm build` 之后**（`go:embed all:frontend/dist` 要求 dist 存在产物；
 仓库里提交的 `frontend/dist/.gitkeep` 只是为了让 go.mod 能通过编译）。
 
+`release.yml`（打 tag 触发）跑的是同一套 check/vet/test 门槛，另外校验
+`GITHUB_REF_NAME` 与 `wails.json` 的 `productVersion` 一致——**不要**只把检查留在
+ci.yml：release 曾经只 build 不检查，红灯提交照样能发出去。
+
 ## Architecture
 
 Tauri 2 + Rust 版（my-video-tauri）的同功能 Go 重写版：Go + Wails v2 桌面应用 +
@@ -156,8 +160,15 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - **跨文件一致性由 `scripts/check-config-sync.mjs` 把守**（接入 pnpm check/build）：
   INLINE ⊆ VIDEO_TYPES、两清单无重复全小写、`DEFAULT_SHARE_PORT`/`MIN_VIDEO_FILE_SIZE_BYTES`
   与 Go 常量一致、**版本号在 `wails.json` 的 `info.productVersion` /
-  `frontend/package.json` 的 `version` / `CHANGELOG.md` 最新条目三处一致**。
-  同一个决策写两处时必须同步补断言
+  `frontend/package.json` 的 `version` / `CHANGELOG.md` 最新条目三处一致**、
+  `app.go` 的绑定方法与 `desktop.ts` 的 `AppBindings` 名字与参数个数一一对应。
+  同一个决策写两处时必须同步补断言。
+  注意断言要钉**代码**而不是注释：禁 `canPlayType` 的那条必须先剥掉注释再匹配，
+  否则 format.ts 里"解释为什么不要用它"的注释本身就会让检查红灯
+  （第一版就是这么错的）
+- **`scripts/check-web-build.mjs` 必须断言"入口真的被引用"**：只校验
+  "index.html 引用的资源都存在"是不够的——`<script>` 标签整个消失时引用列表为空，
+  循环一次都不跑、照样打绿勾，而这正是白屏形态。现在强制至少 1 个 `.js` 与 1 个 `.css`
 - **发版改版本号要同时动三处**：`wails.json:14`（进 exe 版本资源）、
   `frontend/package.json:4`、`CHANGELOG.md` 顶部的 `## [x.y.z] - 日期`。
   漏掉 CHANGELOG 是这里最常见的漂移，`check-config-sync.mjs` 会红灯。

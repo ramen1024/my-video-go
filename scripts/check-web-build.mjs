@@ -52,4 +52,35 @@ for (const ref of refs) {
   }
 }
 
-console.log(`✓ 构建产物校验通过：index.html + ${refs.length} 个引用资源`);
+// 入口必须真的被引用：光"引用的都存在"是不够的——若 <script> 标签整个消失
+// （构建配置写错、插件把标签吃掉），refs 会是空数组，上面的循环一次都不跑，
+// 检查照旧打绿勾。而"没有入口脚本"正是本脚本要防的白屏形态。
+const hasEntryScript = refs.some((r) => /\.m?js$/.test(r));
+const hasStylesheet = refs.some((r) => /\.css$/.test(r));
+if (!hasEntryScript) {
+  fail(
+    `index.html 没有引用任何 JS 入口（找到 ${refs.length} 个引用：${refs.join(", ") || "无"}）。` +
+      "产物没有入口脚本会直接白屏",
+  );
+}
+if (!hasStylesheet) {
+  fail(
+    `index.html 没有引用任何 CSS（找到 ${refs.length} 个引用：${refs.join(", ") || "无"}）。` +
+      "Vite 应至少产出一个入口样式表；若确实改成了运行时注入样式，请同步更新本检查",
+  );
+}
+
+// 相对路径引用（./assets/...）同样要能解析：上面的正则只认以 / 开头的绝对路径，
+// 而 Vite 的 base 一旦被改成相对路径就会全部漏检
+const relRefs = [...index.matchAll(/(?:src|href)="(\.\/[^"]*)"/g)].map((m) => m[1]);
+for (const ref of relRefs) {
+  const normalized = "/" + ref.replace(/^\.\//, "");
+  if (!allFiles.has(normalized)) {
+    fail(`index.html 以相对路径引用了不存在的资源: ${ref}`);
+  }
+}
+
+console.log(
+  `✓ 构建产物校验通过：index.html + ${refs.length} 个绝对引用资源` +
+    `${relRefs.length ? ` + ${relRefs.length} 个相对引用` : ""}（含 JS 入口与样式表）`,
+);
