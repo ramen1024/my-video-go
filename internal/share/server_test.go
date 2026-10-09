@@ -114,10 +114,23 @@ func TestAuthDisabledEverythingOpen(t *testing.T) {
 func TestFullAuthFlow(t *testing.T) {
 	s, _ := newTestServer(t, true)
 
-	// 未认证 → 302 /login
+	// 未认证 → 文档导航 302 /login，接口与子资源请求 401
 	w := doReq(s, "GET", "/videos", "", "", nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("未认证的接口请求应 401（而非 302，避免把登录页 HTML 当 JSON）: %d", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "text/plain") {
+		t.Fatalf("401 应为纯文本，不能是 text/html: %q", ct)
+	}
+	if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("401 必须 no-store，否则会被缓存: %q", cc)
+	}
+	w = doReq(s, "GET", "/", "", "", map[string]string{
+		"Sec-Fetch-Dest": "document",
+		"Accept":         "text/html,application/xhtml+xml",
+	})
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/login" {
-		t.Fatalf("未认证应 302 /login: %d", w.Code)
+		t.Fatalf("未认证的文档导航应 302 /login: %d", w.Code)
 	}
 
 	// 登录页可访问，含注入 nonce 的脚本与 theme 令牌
@@ -178,6 +191,79 @@ func TestFullAuthFlow(t *testing.T) {
 	w = doReq(s, "GET", "/login", "", cookie, nil)
 	if w.Code != http.StatusFound || w.Header().Get("Location") != "/" {
 		t.Fatalf("已认证访问 /login 应 302 /: %d", w.Code)
+	}
+}
+
+// 未认证请求按"文档导航"与"其余请求"分流：
+// 302 会把登录页的 HTML 发给 <video> 与 fetch，让它们报出误导性的错误，
+// 因此只有浏览器地址栏发起的导航才允许重定向。
+func TestUnauthenticatedRequestSplit(t *testing.T) {
+	s, st := newTestServer(t, true)
+	dir := t.TempDir()
+	makeVideo(t, filepath.Join(dir, "v.mp4"), 2*mib)
+	st.SetFolderPath(dir)
+
+	htmlAccept := map[string]string{"Accept": "text/html,application/xhtml+xml,*/*;q=0.8"}
+
+	// Sec-Fetch-Dest 判定：document/iframe 导航，其余一律非导航
+	navigations := []map[string]string{
+		{"Sec-Fetch-Dest": "document"},
+		{"Sec-Fetch-Dest": "iframe"},
+	}
+	for _, h := range navigations {
+		w := doReq(s, "GET", "/", "", "", h)
+		if w.Code != http.StatusFound || w.Header().Get("Location") != "/login" {
+			t.Fatalf("%v 应 302 /login: %d", h, w.Code)
+		}
+	}
+
+	// 非导航目标：<video> 的 Range、<script>、fetch 的接口都必须 401
+	nonNav := []struct {
+		method, target string
+		header         map[string]string
+	}{
+		{"GET", "/video/v.mp4", map[string]string{"Sec-Fetch-Dest": "video"}},
+		{"GET", "/video/v.mp4", map[string]string{"Range": "bytes=0-99"}},
+		{"GET", "/videos", map[string]string{"Sec-Fetch-Dest": "empty"}},
+		{"POST", "/refresh", map[string]string{"Sec-Fetch-Dest": "empty"}},
+		{"GET", "/refresh-status", map[string]string{"Sec-Fetch-Dest": "empty"}},
+		{"GET", "/assets/app-abc123.js", map[string]string{"Sec-Fetch-Dest": "script"}},
+	}
+	for _, c := range nonNav {
+		w := doReq(s, c.method, c.target, "", "", c.header)
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("%s %s (%v) 应 401 而非 302: %d", c.method, c.target, c.header, w.Code)
+		}
+		// 关键：绝不能是登录页的 HTML，否则 <video> 会当成解码失败
+		if strings.Contains(w.Body.String(), "<!DOCTYPE") ||
+			strings.Contains(w.Body.String(), "<script") {
+			t.Fatalf("%s %s 的 401 响应体不得含 HTML: %q", c.method, c.target, w.Body.String())
+		}
+	}
+
+	// 没有 Sec-Fetch-Dest（老浏览器 / curl）时退回 Accept 判定
+	w := doReq(s, "GET", "/", "", "", htmlAccept)
+	if w.Code != http.StatusFound {
+		t.Fatalf("仅凭 Accept: text/html 也应判为导航并 302: %d", w.Code)
+	}
+	w = doReq(s, "GET", "/videos", "", "", map[string]string{"Accept": "*/*"})
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("Accept: */* 应判为非导航并 401: %d", w.Code)
+	}
+	// 无 Accept 无 Sec-Fetch-Dest 的裸请求（纯 API 客户端）走 401 而非登录页
+	w = doReq(s, "GET", "/videos", "", "", nil)
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("裸 API 请求应 401: %d", w.Code)
+	}
+
+	// 带有效 Cookie 后一律放行（含被 401 拦下的路径）
+	w = doReq(s, "POST", "/auth", `{"password":"1234"}`, "", nil)
+	cookie := w.Header().Get("Set-Cookie")
+	for _, c := range nonNav {
+		rw := doReq(s, c.method, c.target, "", cookie, c.header)
+		if rw.Code == http.StatusUnauthorized || rw.Code == http.StatusFound {
+			t.Fatalf("认证后 %s %s 应放行: %d", c.method, c.target, rw.Code)
+		}
 	}
 }
 

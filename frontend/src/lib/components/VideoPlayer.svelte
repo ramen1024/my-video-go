@@ -15,11 +15,13 @@
     videoSrc: string;
     onClose: () => void;
     /**
-     * 播放失败时上报（容器/编码不支持等）
+     * 播放失败时上报（容器/编码不支持、会话失效等）
      *
-     * 由页面统一处理：展示原因，并在有系统播放器时自动回退（见 `App.svelte`）。
+     * 由页面统一处理：区分失败原因后展示对应提示，并在有系统播放器时自动回退
+     * （见 `App.svelte`）。允许返回 Promise——页面需要先向服务端确认状态码
+     * （`<video>` 的 error 事件本身不带 HTTP 状态码）。
      */
-    onError?: (message: string) => void;
+    onError?: (message: string) => void | Promise<void>;
   }
 
   let { video, videoSrc, onClose, onError }: Props = $props();
@@ -32,9 +34,10 @@
   }
 
   function handleVideoError() {
-    // 关闭播放器时会清空 src，同样会触发 error；只有仍在播放时才视为真正的播放失败
+    // 关闭播放器时会清空 src，同样会触发 error；只有仍在播放时才视为真正的播放失败。
+    // onError 可能返回 Promise（页面要先向服务端确认 401），此处不阻塞 error 事件处理。
     if (videoElement?.src) {
-      onError?.(`该文件无法在内置播放器中播放: ${video.name}`);
+      void onError?.(`该文件无法在内置播放器中播放: ${video.name}`);
     }
   }
 

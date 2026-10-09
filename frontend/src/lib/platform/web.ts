@@ -234,6 +234,22 @@ export const web: Platform = {
     throw new Error("网页端不支持调用系统播放器");
   },
 
+  async isPlaybackAuthFailure(video) {
+    // <video> 的 error 事件不告诉前端 HTTP 状态码，401（会话过期）与解码失败
+    // 长得一模一样。用一次 1 字节 Range 请求向服务端确认：拿到 401 就是会话没了，
+    // 该提示重新登录而不是"该文件无法播放"。
+    try {
+      const response = await fetch(web.videoSrc(video), {
+        cache: "no-store",
+        headers: { Range: "bytes=0-0" },
+      });
+      return response.status === 401;
+    } catch {
+      // 网络不可达与鉴权无关，按"不是会话问题"处理
+      return false;
+    }
+  },
+
   // ---------------- 桌面端专属能力：抛错桩 ----------------
   // 网页端是被共享的一方，canShare 恒为 false，UI 不会渲染这些入口。
 

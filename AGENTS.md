@@ -57,7 +57,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   **不要**把它改回受 `mu` 保护
 - `share/` — 内嵌 HTTP 服务器：`Handler()` 组装 安全头 → Host 校验 → 会话鉴权 → 路由；
   `ResolveVideoPath` 是桌面端与网页端共用的路径解析/校验；`VideoHandler` 是两端共用的
-  `/video/*` 流式播放处理（路径校验/白名单/Range）
+  `/video/*` 流式播放处理（路径校验/白名单/Range）。`withAuth` 只对**文档导航**
+  （`Sec-Fetch-Dest: document`/`iframe`，缺失时退回 `Accept: text/html`）302 到
+  `/login`，其余请求一律 401 —— `<video>` 拿到登录页 HTML 只会报"无法播放"，
+  把会话过期误报成解码失败。**不要**改回统一 302
 - `player/` — 桌面端内联播放专用的**回环 HTTP 服务器**（127.0.0.1 随机端口，
   只路由 `/video/` 到 `share.VideoHandler`）
 - `state/` — AppState：atomic.Pointer 快照（列表+ETag、共享信息、刷新结果）、

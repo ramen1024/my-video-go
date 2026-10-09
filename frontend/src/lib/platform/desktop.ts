@@ -131,6 +131,13 @@ export const desktop: Platform = {
     await bindings().PlayVideo(video.relativePath);
   },
 
+  async isPlaybackAuthFailure() {
+    // 恒 false：桌面端内联播放走 127.0.0.1 回环服务器，它不做会话鉴权，
+    // 共享密码对它不生效（见 internal/player 的威胁模型说明），
+    // 因此这里的失败一定来自解码能力，而不是登录态。
+    return false;
+  },
+
   async startShare(folder, port) {
     return await bindings().StartShareServer(folder, port);
   },

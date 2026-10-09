@@ -132,6 +132,18 @@ export interface Platform {
    */
   openWithSystemPlayer(video: VideoItem): Promise<void>;
 
+  /**
+   * 播放失败后判定是否因会话失效
+   *
+   * `<video>` 的 error 事件不携带 HTTP 状态码，"服务端拒绝"与"解码器放不出来"
+   * 在前端看来完全一样。网页端会话过期时 `/video/*` 返回 401（不再重定向到
+   * 登录页），若不区分就会把"重新登录"报成"该文件无法播放"。
+   *
+   * 桌面端恒为 `false`：内联播放走本机回环服务器，它不做会话鉴权
+   * （见 `internal/player` 的威胁模型说明）。
+   */
+  isPlaybackAuthFailure(video: VideoItem): Promise<boolean>;
+
   // ---------------- 局域网共享与密码（仅桌面端，由 canShare 守卫） ----------------
 
   /**

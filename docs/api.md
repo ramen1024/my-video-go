@@ -25,8 +25,20 @@ Go `net/http` 服务器处理，默认监听由应用界面显示的本地 IP �
 - `GET /login`
 - `GET /login.html`
 
-未携带有效 Cookie 的请求会被 `302` 重定向到 `/login`。注意：**前端静态资源同样受保护**，
-未认证时请求 `/assets/...` 也会拿到指向 `/login` 的重定向而不是 JS 文件。
+未携带有效 Cookie 的请求按两类分流：
+
+| 请求类型 | 响应 | 判定依据 |
+|---------|------|---------|
+| 文档导航（地址栏输入 URL、刷新页面） | `302` → `/login` | `Sec-Fetch-Dest: document`/`iframe`，缺失时退回 `Accept` 含 `text/html` |
+| 其余全部（`fetch` 的 JSON 接口、`/video/*` 的 Range 请求、静态资源） | `401 Unauthorized`（`text/plain`，`Cache-Control: no-store`） | `Sec-Fetch-Dest` 为 `video`/`empty`/`script` 等，或 `Accept: */*` |
+
+分流是必要的：统一 `302` 会把登录页的 HTML 当作应答内容发回去。`<video>` 收到
+`text/html` 的 200 只会报"无法播放"，把会话过期误报成编码不支持；`fetch` 则会拿到
+无法解析的响应体。返回 `401` 后前端 `web.ts` 的 `isAuthFailure` 仍能识别（它同时检查
+`response.redirected` 与 `401`），`<video>` 侧则由 `isPlaybackAuthFailure` 用一次
+1 字节 Range 请求向服务端确认状态码。
+
+注意：**前端静态资源同样受保护**，未认证时请求 `/assets/...` 得到 `401` 而不是 JS 文件。
 
 已认证（或未启用密码保护）时访问 `/login` 会 `302` 重定向回 `/`。
 
@@ -208,6 +220,8 @@ Range 解析由 Go 标准库 `http.ServeContent` 完成（桌面端 webview 内�
   `Content-Range: bytes */<文件大小>`）。
 - 响应头包含 `Accept-Ranges: bytes` 与 `Content-Type`（根据**小写化后的**扩展名自动推断，
   因此 `Movie.MP4` 也能拿到 `video/mp4`）。
+- 密码保护启用且会话失效时返回 `401`（**不是** `302`）：`<video>` 拿到的必须是明确的
+  状态码而不是登录页 HTML，否则会把"需要重新登录"报成"该文件无法播放"。
 
 **示例请求：**
 

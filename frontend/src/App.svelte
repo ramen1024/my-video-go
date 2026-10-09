@@ -121,17 +121,26 @@
   }
 
   /**
-   * 内置播放失败（容器/编码/音轨不支持）后的兜底
+   * 内置播放失败后的兜底
    *
-   * webview 的真实解码能力随平台与文件内的编码而变，静态清单只能给出"值得一试"
-   * （mkv 在 Chromium 系 webview 能播、在 WebKit 系不能；同样是 mkv，HEVC 视频轨或
-   * AC3 音轨也会放不出来），因此失败时必须回退，否则用户看到的是"播放器一闪就没了"。
+   * 两种失败原因，处理方式完全不同：
+   *   - 会话失效（网页端 session 过期，`/video/*` 返回 401）：<video> 的 error
+   *     事件不带状态码，与解码失败无法直接区分，因此先向服务端确认一次；
+   *     此时该提示重新登录，交给系统播放器也没用（它同样要过鉴权）。
+   *   - 容器/编码/音轨不支持：webview 的真实解码能力随平台与文件内的编码而变，
+   *     静态清单只能给出"值得一试"（mkv 在 Chromium 系 webview 能播、在 WebKit 系不能；
+   *     同样是 mkv，HEVC 视频轨或 AC3 音轨也会放不出来），因此失败时必须回退到系统
+   *     播放器，否则用户看到的是"播放器一闪就没了"。
    */
-  function handlePlaybackFailure(message: string) {
+  async function handlePlaybackFailure(message: string) {
     const failed = currentVideo;
     currentVideo = null;
     if (!failed) {
       errorMsg = message;
+      return;
+    }
+    if (await platform.isPlaybackAuthFailure(failed)) {
+      errorMsg = "登录已过期，请重新登录后再播放";
       return;
     }
     if (platform.canOpenWithSystemPlayer) {
