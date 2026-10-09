@@ -5,7 +5,7 @@
 | Action | Command |
 |--------|---------|
 | Dev (全栈, 前端热重载) | `wails dev` |
-| Dev (仅前端, 网页端桩) | `cd frontend && pnpm dev` |
+| Dev (仅前端, 网页端桩) | `cd frontend && pnpm dev`（需另起后端，见下） |
 | Dev (网页端离线预览, 推荐) | `go run ./cmd/webpreview -dir frontend/dist [视频文件夹]` |
 | Type check + 一致性校验 | `cd frontend && pnpm check` |
 | 前端构建（含产物校验） | `cd frontend && pnpm build` |
@@ -13,6 +13,10 @@
 | Go check | `go vet ./...` |
 | Go test | `go test ./...` |
 | Go format | `gofmt -w .` |
+
+`pnpm dev` 已把 `/videos`、`/video`、`/refresh`、`/refresh-status`、`/auth`、`/login`
+代理到 `127.0.0.1:6010`（`cmd/webpreview` 的默认端口），因此**另起一个后端**即可获得
+完整功能的前端热重载；两边的端口要对应（`vite.config.ts` 里的 `BACKEND`）。
 
 CI（`.github/workflows/ci.yml`）在 `windows-latest` 上运行：`pnpm install --frozen-lockfile`
 → `pnpm check` → `pnpm build` → gofmt 检查 → `go vet` → `go test` → `wails build`。
