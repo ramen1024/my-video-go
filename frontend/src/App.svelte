@@ -402,24 +402,7 @@
     text-overflow: ellipsis;
   }
 
-  .dismiss-btn {
-    margin-left: auto;
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    padding: 2px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0.7;
-    transition: opacity 0.15s ease;
-    flex-shrink: 0;
-  }
-
-  .dismiss-btn:hover {
-    opacity: 1;
-  }
+  /* .dismiss-btn 的规则在 $lib/styles/buttons.css（与 ErrorMessage.svelte 共用） */
 
   .path-label {
     color: var(--text-tertiary);
@@ -466,6 +449,7 @@
     animation: spin 1s linear infinite;
   }
 
+  /* 必须留在组件内：Svelte 会按组件重命名 keyframes（见 buttons.css 的说明） */
   @keyframes spin {
     to { transform: rotate(360deg); }
   }

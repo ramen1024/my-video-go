@@ -95,6 +95,17 @@
     return { name: "文件名", size: "大小", modified: "修改日期" }[field];
   }
 
+  /**
+   * 供 role="columnheader" 声明排序状态
+   *
+   * aria-sort 只对 columnheader/rowheader 有效，因此这些角色与它成对出现；
+   * 未排序的列给 "none"（规范里的合法取值），读屏器据此播报列是否可排序。
+   */
+  function ariaSort(field: SortField): "ascending" | "descending" | "none" {
+    if (sortField !== field) return "none";
+    return sortDirection === "asc" ? "ascending" : "descending";
+  }
+
   function handleRowKeydown(e: KeyboardEvent, video: VideoItem) {
     if (e.key === "Enter" || e.key === " ") {
       e.preventDefault();
@@ -116,61 +127,76 @@
     <p>没有找到匹配 "{debouncedSearch}" 的视频</p>
   </div>
 {:else}
-  <div class="table-header">
-    <div class="header-row">
-      <div class="col-name">
-        <button class="sort-btn" class:active={sortField === "name"} onclick={() => toggleSort("name")}>
-          {sortLabel("name")}
-          {#if sortField === "name"}
-            <svg class="sort-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={sortDirection === "asc" ? "M12 19V5M5 12l7-7 7 7" : "M12 5v14M5 12l7 7 7-7"}></path></svg>
-          {/if}
-        </button>
+  <!--
+    用 role="table" 提供表格语义（列头/行列），但**不用** <table> 元素：
+    本表是绝对定位 + 虚拟滚动的布局，原生 table 的表格布局算法与之冲突。
+    角色层级必须是 table > rowgroup > row > columnheader/cell，缺一层都属于
+    无效 ARIA（比不加角色更糟：读屏器会给出错误的结构播报）。
+  -->
+  <div class="video-table" role="table" aria-label="视频列表" aria-rowcount={displayVideos.length}>
+    <div class="table-header" role="rowgroup">
+      <div class="header-row" role="row">
+        <div class="col-name" role="columnheader" aria-sort={ariaSort("name")}>
+          <button class="sort-btn" class:active={sortField === "name"} onclick={() => toggleSort("name")}>
+            {sortLabel("name")}
+            {#if sortField === "name"}
+              <svg class="sort-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={sortDirection === "asc" ? "M12 19V5M5 12l7-7 7 7" : "M12 5v14M5 12l7 7 7-7"}></path></svg>
+            {/if}
+          </button>
+        </div>
+        <div class="col-size" role="columnheader" aria-sort={ariaSort("size")}>
+          <button class="sort-btn" class:active={sortField === "size"} onclick={() => toggleSort("size")}>
+            {sortLabel("size")}
+            {#if sortField === "size"}
+              <svg class="sort-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={sortDirection === "asc" ? "M12 19V5M5 12l7-7 7 7" : "M12 5v14M5 12l7 7 7-7"}></path></svg>
+            {/if}
+          </button>
+        </div>
+        <div class="col-date" role="columnheader" aria-sort={ariaSort("modified")}>
+          <button class="sort-btn" class:active={sortField === "modified"} onclick={() => toggleSort("modified")}>
+            {sortLabel("modified")}
+            {#if sortField === "modified"}
+              <svg class="sort-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={sortDirection === "asc" ? "M12 19V5M5 12l7-7 7 7" : "M12 5v14M5 12l7 7 7-7"}></path></svg>
+            {/if}
+          </button>
+        </div>
+        <div class="col-action" role="columnheader"><span class="sr-only">操作</span></div>
       </div>
-      <div class="col-size">
-        <button class="sort-btn" class:active={sortField === "size"} onclick={() => toggleSort("size")}>
-          {sortLabel("size")}
-          {#if sortField === "size"}
-            <svg class="sort-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={sortDirection === "asc" ? "M12 19V5M5 12l7-7 7 7" : "M12 5v14M5 12l7 7 7-7"}></path></svg>
-          {/if}
-        </button>
-      </div>
-      <div class="col-date">
-        <button class="sort-btn" class:active={sortField === "modified"} onclick={() => toggleSort("modified")}>
-          {sortLabel("modified")}
-          {#if sortField === "modified"}
-            <svg class="sort-icon" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d={sortDirection === "asc" ? "M12 19V5M5 12l7-7 7 7" : "M12 5v14M5 12l7 7 7-7"}></path></svg>
-          {/if}
-        </button>
-      </div>
-      <div class="col-action"></div>
     </div>
-  </div>
-  <div bind:this={scrollElement} class="table-body-container">
-    <div class="table-body" style="height: {$virtualizer.getTotalSize()}px;">
-      {#each $virtualizer.getVirtualItems() as row (row.key)}
-        {@const video = displayVideos[row.index]}
-        <!-- count 在 $effect 中滞后同步：过滤使列表变短的那一次渲染仍会拿到旧范围的
-             index，此时 video 为 undefined，跳过即可避免访问 video.name 抛错 -->
-        {#if video}
-          <div class="table-row" role="button" tabindex="0" style="height: {row.size}px; transform: translateY({row.start}px);" onclick={() => onPlay(video)} onkeydown={(e) => handleRowKeydown(e, video)}>
-            <div class="col-name">
-              <span class="video-name">{video.name}</span>
-              <span class="video-ext">.{video.extension}</span>
+    <div bind:this={scrollElement} class="table-body-container" role="rowgroup">
+      <div class="table-body" style="height: {$virtualizer.getTotalSize()}px;">
+        {#each $virtualizer.getVirtualItems() as row (row.key)}
+          {@const video = displayVideos[row.index]}
+          <!-- count 用 $effect.pre 在渲染**前**同步，正常情况下不会拿到越界 index；
+               这里仍保留 undefined 守卫：effect 与渲染的交错在极端情况下仍可能
+               让本帧拿到旧范围，直接访问 video.name 会抛错 -->
+          {#if video}
+            <!--
+              行本身不用 role="button"（会与外层的 row 冲突，且读屏器不再播报列）：
+              点击整行播放是鼠标便利，键盘可达性由行内那两个真按钮提供
+              （它们带文件名，读屏器能听出是哪一条）。行上保留 Enter 处理，
+              焦点在行内时也能触发播放。
+            -->
+            <div class="table-row" role="row" tabindex="0" style="height: {row.size}px; transform: translateY({row.start}px);" onclick={() => onPlay(video)} onkeydown={(e) => handleRowKeydown(e, video)}>
+              <div class="col-name" role="cell">
+                <span class="video-name">{video.name}</span>
+                <span class="video-ext">.{video.extension}</span>
+              </div>
+              <div class="col-size" role="cell">{formatFileSize(video.size)}</div>
+              <div class="col-date" role="cell">{video.modified || "-"}</div>
+              <div class="col-action" role="cell">
+                {#if preferInlinePlayback(video)}
+                  <button class="play-btn" onclick={(e) => { e.stopPropagation(); onPlay(video); }} onkeydown={(e) => e.stopPropagation()} aria-label="播放 {video.name}">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                  </button>
+                {:else}
+                  <button class="system-btn" onclick={(e) => { e.stopPropagation(); onPlay(video); }} onkeydown={(e) => e.stopPropagation()} aria-label="用系统播放器打开 {video.name}">打开</button>
+                {/if}
+              </div>
             </div>
-            <div class="col-size">{formatFileSize(video.size)}</div>
-            <div class="col-date">{video.modified || "-"}</div>
-            <div class="col-action">
-              {#if preferInlinePlayback(video)}
-                <button class="play-btn" onclick={(e) => { e.stopPropagation(); onPlay(video); }} onkeydown={(e) => e.stopPropagation()} aria-label="播放">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
-                </button>
-              {:else}
-                <button class="system-btn" onclick={(e) => { e.stopPropagation(); onPlay(video); }} onkeydown={(e) => e.stopPropagation()} aria-label="用系统播放器打开">打开</button>
-              {/if}
-            </div>
-          </div>
-        {/if}
-      {/each}
+          {/if}
+        {/each}
+      </div>
     </div>
   </div>
 {/if}
@@ -236,10 +262,32 @@
     font-size: 13px;
   }
 
+  /* 表格语义容器：本身不产生视觉，只负责让 header 与可滚动 body 纵向排布
+     （原来是两个并列的 flex 子项，现在被这个 role="table" 包了一层） */
+  .video-table {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-height: 0;
+  }
+
   .table-header {
     background: var(--bg);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+  }
+
+  /* 仅供读屏器的文本（列头"操作"没有可见标题） */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 
   .header-row {

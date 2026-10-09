@@ -136,7 +136,7 @@
 <div class="password-panel">
   <div class="panel-header">
     <div class="panel-title">访问密码</div>
-    <button class="toggle-btn" class:active={passwordEnabled} onclick={toggleProtection}>
+    <button class="toggle-btn" class:active={passwordEnabled} onclick={toggleProtection} aria-pressed={passwordEnabled}>
       {passwordEnabled ? "已开启" : "未开启"}
     </button>
   </div>

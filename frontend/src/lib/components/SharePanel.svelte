@@ -82,7 +82,12 @@
       </div>
       <div class="ip-list">
         {#each shareInfo.ips as ip}
-          <button class="ip-btn" class:selected={ip === selectedIp} onclick={() => selectIp(ip)}>
+          <button
+            class="ip-btn"
+            class:selected={ip === selectedIp}
+            aria-pressed={ip === selectedIp}
+            onclick={() => selectIp(ip)}
+          >
             {ip}
           </button>
         {/each}

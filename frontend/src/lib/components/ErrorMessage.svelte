@@ -54,21 +54,5 @@
     font-weight: 500;
   }
 
-  .dismiss-btn {
-    margin-left: auto;
-    background: none;
-    border: none;
-    color: inherit;
-    cursor: pointer;
-    padding: 2px;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    opacity: 0.7;
-    transition: opacity 0.15s ease;
-  }
-
-  .dismiss-btn:hover {
-    opacity: 1;
-  }
+  /* .dismiss-btn 的规则在 $lib/styles/buttons.css（与 App.svelte 的提示条共用） */
 </style>

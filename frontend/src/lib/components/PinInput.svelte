@@ -86,11 +86,11 @@
   </div>
 
   {#if errorMsg}
-    <div class="pin-banner error">{errorMsg}</div>
+    <div class="pin-banner error" role="alert">{errorMsg}</div>
   {:else if success}
-    <div class="pin-banner success">密码设置成功</div>
+    <div class="pin-banner success" role="status">密码设置成功</div>
   {:else if submitting}
-    <div class="pin-banner info">设置中…</div>
+    <div class="pin-banner info" role="status">设置中…</div>
   {/if}
 
   <div class="numpad" class:dimmed={submitting}>

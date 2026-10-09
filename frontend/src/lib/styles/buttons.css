@@ -84,3 +84,46 @@
 .btn-danger:hover:not(:disabled) {
   background: var(--danger-hover);
 }
+
+/**
+ * 提示条上的"关闭/忽略"图标按钮
+ *
+ * 原先在 ErrorMessage.svelte 与 App.svelte 里各写了一份完全相同的规则；
+ * 放到这里让两者共用（组件内的 <style> 是 scoped 的，无法互相复用）。
+ * 用 :global 是因为使用方是别的组件（各自带自己的 scoped 属性）。
+ */
+:global(.dismiss-btn) {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  padding: 2px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.7;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+}
+
+:global(.dismiss-btn:hover) {
+  opacity: 1;
+}
+
+/* 仅供读屏器的文本（视觉上不可见，但仍留在可访问性树里） */
+:global(.sr-only) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* 注意：**不要**把组件的 @keyframes 挪到这里。Svelte 会把组件内的 keyframes
+   按组件作用域重命名（`spin` → `svelte-xxxx-spin`）并同步改写 animation 引用，
+   因此全局定义对它不可见——挪过来只会让动画静默失效。 */
