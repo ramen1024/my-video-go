@@ -33,24 +33,35 @@ func (h VideoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	abs, err := ResolveVideoPath(h.State.FolderPath(), rel)
-	if err != nil {
-		if errors.Is(err, ErrTraversal) {
-			writeText(w, http.StatusForbidden, "Access denied: invalid path")
-			return
-		}
+	folder := h.State.FolderPath()
+	if folder == "" {
 		writeText(w, http.StatusNotFound, "File not found")
 		return
 	}
+	// 每请求开一次 Root（108µs）而非缓存（57µs）：缓存会在 Windows 上长期
+	// 持有目录句柄，导致用户无法重命名/删除正在共享的视频目录——不值得。
+	root, err := os.OpenRoot(folder)
+	if err != nil {
+		// 目录已删除或不可访问
+		writeText(w, http.StatusNotFound, "File not found")
+		return
+	}
+	defer root.Close()
 
-	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(abs), "."))
+	// 扩展名先按**请求路径**判定：省掉打开文件才发现不是视频的 wasted open，
+	// 也让非视频请求统一得到 403（而不是因不存在而 404，暴露探测差异）。
+	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(rel), "."))
 	if !constants.IsSupportedVideoExtension(ext) {
 		writeText(w, http.StatusForbidden, "Access denied: not a supported video file")
 		return
 	}
 
-	f, err := os.Open(abs)
+	f, err := root.Open(rel)
 	if err != nil {
+		if isPathEscape(err) {
+			writeText(w, http.StatusForbidden, "Access denied: invalid path")
+			return
+		}
 		writeText(w, http.StatusNotFound, "File not found")
 		return
 	}
@@ -66,6 +77,15 @@ func (h VideoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// ServeContent 自动处理：Range 单段/后缀、206、416、Content-Range、
 	// Accept-Ranges: bytes、If-Range、Last-Modified
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
+}
+
+// isPathEscape 判断错误是否为"路径逃出共享目录"。
+//
+// os.Root 用包内未导出的 errPathEscapes（"path escapes from parent"）表达
+// 穿越与绝对符号链接，无法用 errors.Is 匹配，只能匹配错误文本。
+// 这是与标准库内部实现耦合的一处，升级 Go 时值得用测试复核。
+func isPathEscape(err error) bool {
+	return strings.Contains(err.Error(), "escapes from parent")
 }
 
 // ResolveVideoPath 把相对路径解析到 folder 内的真实绝对路径。

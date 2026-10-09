@@ -97,6 +97,17 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - **视频扩展名一律按小写比较**：`videoTypes` 的键是小写，查表前必须 `ToLower`；
   `/video/*` 的白名单与 Content-Type 复用**同一个已小写化**的扩展名（`Movie.MP4`
   必须拿到 `video/mp4`）
+- **`/video/*` 走 `os.OpenRoot` 做路径包含检查**，不要再写 `EvalSymlinks` + 前缀比较
+  （实测完整 HTTP 路径 2203µs → 746µs、allocs 154 → 38）。两个语义差异必须记住：
+  ① `os.Root` **拒绝绝对符号链接**（即便指向目录内部），`ResolveVideoPath` 仍用旧逻辑，
+     因为桌面端 `PlayVideo` 要绝对路径交给系统播放器；② 逃逸错误靠匹配错误文本
+  `"escapes from parent"` 识别（标准库的 `errPathEscapes` 未导出），
+     `isPathEscape` 是与 Go 内部实现耦合的一处，升级 Go 要用
+     `TestVideoEscapeAttemptsStillForbidden` 复核。
+  **不要**为缓存 `*os.Root` 而改造 `state`：Windows 上长期持有目录句柄会让用户
+  无法重命名/删除正在共享的视频目录（也会让 `t.TempDir()` 清理失败）
+- **`/video/*` 的扩展名白名单按请求路径判定**（不是打开后看真实文件名）：
+  非视频请求统一 403，不因文件是否存在而在 403/404 间变化，避免用状态码探测
 - `INLINE_PLAYABLE_EXTENSIONS`（format.ts，能否内联播放）是**启发式清单不是保证**：
   不要改成 `canPlayType` 探测（假阴性），不要当硬保证；`VideoPlayer` 的播放失败回退
   （error 事件 → 系统播放器，页面侧在 App.svelte 的 handlePlaybackFailure）不能删。

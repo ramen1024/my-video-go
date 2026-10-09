@@ -207,10 +207,13 @@ Session Cookie 属性：`HttpOnly; SameSite=Strict; Path=/`，有效期与服务
 Range 解析由 Go 标准库 `http.ServeContent` 完成（桌面端 webview 内的播放也走同一实现）。
 
 - `<relative_path>` 为视频文件相对于共享文件夹的路径，需要进行 URL 编码。
-- **路径必须位于共享文件夹内（解析符号链接后仍不得逃逸），且扩展名必须在受支持的视频
-  格式白名单内**（mp4 / m4v / mkv / webm / avi / mov / wmv / flv / mpg / mpeg，见
+- **路径必须位于共享文件夹内，且扩展名必须在受支持的视频格式白名单内**
+  （mp4 / m4v / mkv / webm / avi / mov / wmv / flv / mpg / mpeg，见
   `internal/constants/constants.go` 的 `videoTypes`）。不满足时返回 `403`——共享文件夹中的
   其他文件（如 `.txt`、`.db`、配置文件）不会被提供下载。
+  路径包含检查由 Go 的 `os.Root` 完成：跟随符号链接但不允许逃逸出共享文件夹，
+  也**不接受绝对符号链接**（即便它指向文件夹内部）。白名单按**请求路径**的扩展名判定，
+  因此非视频请求一律 `403`，不会因文件是否存在而在 `403`/`404` 之间变化。
 - 请求头可包含 `Range: bytes=<start>-<end>`，支持以下形式：
   - `bytes=0-499`：指定区间
   - `bytes=100-`：从 100 到文件末尾
