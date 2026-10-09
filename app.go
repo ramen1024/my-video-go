@@ -139,17 +139,19 @@ func (a *App) StartShareServer(folderPath string, port int) (models.ShareServerI
 	return *info, nil
 }
 
-// StopShareServer 停止共享服务器（优雅排空在途请求，最多 5 秒）。
+// StopShareServer 停止共享服务器（优雅排空在途请求，最多 5 秒；
+// 超时则强制断开剩余连接）。Stop 返回后服务器一定已经不再服务，
+// 因此状态机可以直接落到 Stopped。
 func (a *App) StopShareServer() error {
 	if err := a.st.StartServerStopping(); err != nil {
 		return err
 	}
-	err := a.share.Stop()
-	a.st.SetServerStopped()
-	if err != nil {
+	if err := a.share.Stop(); err != nil {
 		slog.Error("停止共享服务器出错", "err", err)
+		a.st.SetServerStopped()
 		return apperr.Other("等待服务器线程退出失败: %v", err)
 	}
+	a.st.SetServerStopped()
 	slog.Info("共享服务器已停止")
 	return nil
 }

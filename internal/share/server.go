@@ -44,6 +44,10 @@ func New(st *state.AppState, pw *password.Manager, assets fs.FS) *Server {
 // Start 在指定端口监听并开始服务。端口被占用时自动向后尝试，
 // 最多 constants.MaxPortAttempts 个；全部失败返回最后一次错误。
 //
+// port 传 0 表示"由系统挑一个空闲端口"（测试与网页端预览用），
+// 此时不做自增重试——系统挑的端口不存在"被占用"的问题，
+// 按 0+attempt 自增只会去试 1、2、3 这些特权端口。
+//
 // 监听结果只在成功后才提交到实例字段：若沿用上次运行残留的 listener 字段
 // 判断成败，"本次全部端口绑定失败"会被误判为成功（假 listener、旧端口、
 // 实际无人监听）。重复 Start 前必须先 Stop（由 AppState 状态机保证）。
@@ -58,10 +62,16 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 
 	ips := localips.Get()
 
+	// port == 0 时只试一次；否则最多向后尝试 MaxPortAttempts 个
+	attempts := constants.MaxPortAttempts
+	if port == 0 {
+		attempts = 1
+	}
+
 	var lastErr error
 	var ln net.Listener
 	var listenPort int
-	for attempt := 0; attempt < constants.MaxPortAttempts; attempt++ {
+	for attempt := 0; attempt < attempts; attempt++ {
 		candidate := port + attempt
 		if candidate > 65535 {
 			break // 端口自增不得溢出 u16
@@ -81,6 +91,12 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 			lastErr = errors.New("没有可用端口")
 		}
 		return nil, fmt.Errorf("服务器启动失败: %w", lastErr)
+	}
+
+	// 以**实际**监听到的端口为准：port 传 0 时系统会分配一个随机端口，
+	// 沿用请求值会让对外信息显示 "端口 0"。对外广播的地址必须可直接使用。
+	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
+		listenPort = tcpAddr.Port
 	}
 
 	srv := &http.Server{
@@ -108,17 +124,28 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 
 // Stop 优雅停止：等待在途请求排空，总超时 constants.ServerStopTimeoutSecs。
 // 实例字段一并清空，Port 归零，下次 Start 从干净状态开始。
+//
+// 排空超时时**强制**关闭剩余连接：否则调用方会以为"已停止"、状态机也回到
+// Stopped，而旧连接仍在被服务，紧接着的 Start 还能在同一端口上叠一个服务器。
 func (s *Server) Stop() error {
 	if s.srv == nil {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), constants.ServerStopTimeoutSecs)
-	defer cancel()
-	err := s.srv.Shutdown(ctx)
+	srv := s.srv
+	// 先清空实例字段再等待：即便下面排空超时，实例也已回到"未启动"状态
 	s.srv = nil
 	s.ln = nil
 	s.port = 0
-	return err
+
+	ctx, cancel := context.WithTimeout(context.Background(), constants.ServerStopTimeoutSecs)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		slog.Warn("优雅停止超时，强制关闭剩余连接", "err", err)
+		// Shutdown 超时后 listener 已关闭，剩下的是在途连接；Close 立即断开它们。
+		// 强制关闭的返回错误（通常只是"已关闭"）不值得上报给用户。
+		_ = srv.Close()
+	}
+	return nil
 }
 
 // Handler 组装完整请求处理链：安全头 → Host 校验（防 DNS rebinding）→

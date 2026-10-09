@@ -16,9 +16,9 @@ func (s *Server) handleVideos(w http.ResponseWriter, r *http.Request) {
 	// .map 会抛 TypeError（从未扫描过与扫描零匹配都走这条路）
 	videos := []models.VideoFile{}
 	etag := `"` + models.ComputeETag(videos) + `"`
-	if list := s.st.Videos(); list != nil {
-		videos = list.Videos
-		etag = `"` + list.ETag + `"`
+	if snap := s.st.Snapshot(); snap != nil {
+		videos = snap.Videos
+		etag = `"` + snap.ETag + `"`
 	}
 
 	if ifNoneMatchHit(r.Header.Get("If-None-Match"), etag) {

@@ -43,10 +43,20 @@ type VideoList struct {
 	ETag   string
 }
 
+// Snapshot 把"当前列表"与"共享目录"绑成**一个**不可变快照。
+//
+// 二者必须一起生效：分成两个 atomic 分别发布时，两次写之间存在窗口——
+// /video/* 会拿到**新列表**的 relative_path 去解析**旧根目录**，得到伪 404；
+// 读取方也无法用一次读取拿到自洽的一对值。
+type Snapshot struct {
+	Videos     []models.VideoFile
+	ETag       string
+	FolderPath string
+}
+
 // AppState 是应用全局状态的唯一载体。
 type AppState struct {
-	videos     atomic.Pointer[VideoList]
-	folderPath atomic.Pointer[string]
+	snap atomic.Pointer[Snapshot]
 
 	cancelScan     atomic.Bool
 	scanInProgress atomic.Bool // CAS 守卫：桌面扫描与网页 /refresh 互斥
@@ -64,33 +74,69 @@ func New() *AppState {
 	return &AppState{}
 }
 
-// ---- 视频列表 ----
+// ---- 视频列表与共享目录 ----
+
+// Snapshot 返回当前的列表+目录快照；从未扫描过时返回 nil。
+// 需要同时用到列表与目录时必须用这个方法，而不是分别调 Videos/FolderPath。
+func (s *AppState) Snapshot() *Snapshot {
+	return s.snap.Load()
+}
 
 // Videos 返回当前列表快照；从未扫描过时返回 nil。
 func (s *AppState) Videos() *VideoList {
-	return s.videos.Load()
+	snap := s.snap.Load()
+	if snap == nil {
+		return nil
+	}
+	return &VideoList{Videos: snap.Videos, ETag: snap.ETag}
 }
 
-// SetVideos 原子替换列表，ETag 随之重算。
+// SetScanResult 用**一次原子发布**同时更新列表与共享目录（扫描完成的唯一通路）。
 //
-// nil 会被归一化为空切片：扫描零匹配时切片保持 nil，而 nil 经 JSON 序列化
+// nil 列表会被归一化为空切片：扫描零匹配时切片保持 nil，而 nil 经 JSON 序列化
 // 是 null，前端对响应直接 .map 会抛 TypeError（桌面绑定与 /videos 都受影响）。
-func (s *AppState) SetVideos(videos []models.VideoFile) {
+func (s *AppState) SetScanResult(videos []models.VideoFile, folder string) {
 	if videos == nil {
 		videos = []models.VideoFile{}
 	}
-	s.videos.Store(&VideoList{Videos: videos, ETag: models.ComputeETag(videos)})
+	s.snap.Store(&Snapshot{
+		Videos:     videos,
+		ETag:       models.ComputeETag(videos),
+		FolderPath: folder,
+	})
+}
+
+// SetVideos 只替换列表，保留当前共享目录（同样是一次原子发布）。
+//
+// 生产代码走 SetScanResult（列表与目录来自同一次扫描）；这个变体用于
+// 只换列表、不动目录的场景（测试与未来的其它列表来源）。
+func (s *AppState) SetVideos(videos []models.VideoFile) {
+	s.SetScanResult(videos, s.FolderPath())
 }
 
 func (s *AppState) FolderPath() string {
-	if p := s.folderPath.Load(); p != nil {
-		return *p
+	if snap := s.snap.Load(); snap != nil {
+		return snap.FolderPath
 	}
 	return ""
 }
 
+// SetFolderPath 只替换共享目录，保留当前列表（同样是一次原子发布）。
 func (s *AppState) SetFolderPath(p string) {
-	s.folderPath.Store(&p)
+	prev := s.snap.Load()
+	next := &Snapshot{
+		Videos:     []models.VideoFile{},
+		FolderPath: p,
+	}
+	if prev != nil {
+		next.ETag = prev.ETag
+		// 只有在上一份快照确实带列表时才沿用：零值快照的 Videos 是 nil，
+		// 沿用它会让 Videos()/Snapshot() 返回一个会序列化成 null 的切片
+		if prev.Videos != nil {
+			next.Videos = prev.Videos
+		}
+	}
+	s.snap.Store(next)
 }
 
 // ---- 扫描互斥与取消 ----
@@ -170,12 +216,17 @@ func (s *AppState) StartServerStarting() error {
 // SetServerRunningWithInfo 将 Starting 置为 Running 并在同一临界区内记录
 // 对外信息。分两步写（先 Running 后 share_info）会留下中间窗口：webview
 // 恰在此刻重载会拿到 Running 但 IPs 空、Port 0 的状态。
+//
+// 只在 Starting 时生效：其它状态说明调用方违反了状态机（例如已在 Stopping
+// 却报告启动成功）。此时**不能**只写 share_info 就返回——那会留下
+// "状态是 Stopping/Stopped、却有一个 Running 才该有的 share_info" 的不一致。
 func (s *AppState) SetServerRunningWithInfo(info *models.ShareServerInfo) {
 	s.srvMu.Lock()
 	defer s.srvMu.Unlock()
-	if s.srvState == StateStarting {
-		s.srvState = StateRunning
+	if s.srvState != StateStarting {
+		return
 	}
+	s.srvState = StateRunning
 	s.shareInfo.Store(info)
 }
 
@@ -208,11 +259,13 @@ func (s *AppState) IsServerRunning() bool {
 }
 
 // ShareStatus 汇总当前共享状态（webview 重载后恢复界面的唯一来源）。
-// running 与 shareInfo 在同一临界区内读取，保证二者一致。
+// running / shareInfo / folder_path 在**同一临界区内**读取，保证三者一致：
+// folder_path 若在解锁后再读，就可能描述另一个目录（扫描正好在那一刻发布）。
 func (s *AppState) ShareStatus() models.ShareStatus {
 	s.srvMu.Lock()
 	running := s.srvState == StateRunning
 	info := s.shareInfo.Load()
+	folder := s.FolderPath()
 	s.srvMu.Unlock()
 
 	status := models.ShareStatus{Running: running, IPs: []string{}}
@@ -223,6 +276,6 @@ func (s *AppState) ShareStatus() models.ShareStatus {
 		status.IPs = info.IPs
 		status.Port = info.Port
 	}
-	status.FolderPath = s.FolderPath()
+	status.FolderPath = folder
 	return status
 }

@@ -186,8 +186,9 @@ func ScanAndStore(st *state.AppState, folder string, cancel *atomic.Bool) (*mode
 	if err != nil {
 		return nil, err
 	}
-	st.SetVideos(res.Videos)
-	st.SetFolderPath(folder)
+	// 列表与目录必须一次发布：分两次写会留下窗口，让 /video/* 用新列表的
+	// relative_path 去解析旧根目录而得到伪 404
+	st.SetScanResult(res.Videos, folder)
 	return &res.Report, nil
 }
 

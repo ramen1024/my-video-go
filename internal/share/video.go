@@ -43,6 +43,8 @@ func (h VideoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 布局读一次：ShareStatus/videos 与扫描共用同一个 atomic 快照，
+	// 因此这里拿到的目录一定来自某次完整发布的扫描，不会是"半应用"状态
 	folder := h.State.FolderPath()
 	if folder == "" {
 		writeText(w, http.StatusNotFound, "File not found")

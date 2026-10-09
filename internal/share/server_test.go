@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -588,6 +589,71 @@ func TestAuthStalledBodyIsTimedOut(t *testing.T) {
 	}
 	if strings.Contains(resp, "200 OK") {
 		t.Fatalf("吊住的请求不该认证成功: %q", resp)
+	}
+}
+
+// Stop 返回后服务器必须真的不再服务，且实例可立即重新 Start（不能留下
+// "旧连接仍被服务 + 新服务器叠在同一端口"的状态）。
+func TestStopUnderLoadThenRestartable(t *testing.T) {
+	s, st := newTestServer(t, false)
+	fillList(st, 200)
+
+	info, err := s.Start(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := fmt.Sprintf("http://127.0.0.1:%d", info.Port)
+
+	// 后台持续压请求，制造"停止时有在途请求"的场景
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	client := &http.Client{Timeout: 3 * time.Second}
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				resp, err := client.Get(base + "/videos")
+				if err != nil {
+					// 服务器已关闭属预期
+					return
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+			}
+		}()
+	}
+
+	// 立刻停止：Stop 必须返回 nil（超时会强制关闭而不是向调用方报错）
+	if err := s.Stop(); err != nil {
+		t.Fatalf("Stop 不应报错: %v", err)
+	}
+	if s.port != 0 || s.srv != nil || s.ln != nil {
+		t.Fatalf("Stop 后字段应清空: port=%d", s.port)
+	}
+
+	// 停止后旧端口必须已经不再服务
+	if resp, err := client.Get(base + "/videos"); err == nil {
+		resp.Body.Close()
+		t.Fatalf("停止后旧端口仍在服务: %d", resp.StatusCode)
+	}
+
+	close(stop)
+	wg.Wait()
+
+	// 必须能立刻重新启动
+	info2, err := s.Start(0)
+	if err != nil {
+		t.Fatalf("停止后应能重新 Start: %v", err)
+	}
+	defer s.Stop()
+	if info2.Port <= 0 {
+		t.Fatalf("重新启动后端口应为正数: %d", info2.Port)
 	}
 }
 
