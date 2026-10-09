@@ -52,6 +52,10 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # 与 ci.yml 相同的 staticcheck 门槛（发版前必须同样干净）
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+
       - name: go test
         run: go test ./...
 

@@ -49,6 +49,13 @@ jobs:
       - name: go vet
         run: go vet ./...
 
+      # staticcheck 是 AGENTS.md 里"clippy 等价物"的答案。用 go run 免安装、
+      # 且把版本钉死，避免某次 CI 升级工具后冒出一批新告警导致全库红。
+      # 版本升级是显式动作：本地跑 `go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...`
+      # 清零告警后，再改这里的版本号。
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+
       - name: go test
         run: go test ./...
 

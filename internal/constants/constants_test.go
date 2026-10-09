@@ -116,8 +116,8 @@ func TestPortAndLimitConstants(t *testing.T) {
 		t.Error("时间常量必须为正")
 	}
 	// 超时常量与前端/测试里按秒换算的写法保持一致的口径。
-	if ServerStopTimeoutSecs.Seconds() != 5 || HTTPReadHeaderTimeout.Seconds() != 10 || HTTPIdleTimeout.Seconds() != 120 {
-		t.Errorf("超时口径变化: stop=%v readHeader=%v idle=%v", ServerStopTimeoutSecs, HTTPReadHeaderTimeout, HTTPIdleTimeout)
+	if ServerStopTimeout.Seconds() != 5 || HTTPReadHeaderTimeout.Seconds() != 10 || HTTPIdleTimeout.Seconds() != 120 {
+		t.Errorf("超时口径变化: stop=%v readHeader=%v idle=%v", ServerStopTimeout, HTTPReadHeaderTimeout, HTTPIdleTimeout)
 	}
 	if HTTPIdleTimeout <= HTTPReadHeaderTimeout {
 		t.Error("HTTPIdleTimeout 应大于 HTTPReadHeaderTimeout")

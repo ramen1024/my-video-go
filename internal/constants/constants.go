@@ -53,8 +53,10 @@ const (
 	// RefreshCooldownSecs 是网页端 /refresh 的冷却时间。
 	RefreshCooldownSecs = 5
 
-	// ServerStopTimeoutSecs 是停止共享服务器时等待在途请求排空的总超时。
-	ServerStopTimeoutSecs = 5 * time.Second
+	// ServerStopTimeout 是停止共享服务器时等待在途请求排空的总超时。
+	// 命名不带单位后缀：类型已是 time.Duration（ST1011），
+	// 同组的 HTTPReadHeaderTimeout / HTTPIdleTimeout 也遵循这一惯例。
+	ServerStopTimeout = 5 * time.Second
 
 	// HTTPReadHeaderTimeout 是读取请求头的超时（防慢连接长期占用 goroutine）。
 	// 有意不设 Read/WriteTimeout：视频流式响应可能持续很久，不能被超时掐断。

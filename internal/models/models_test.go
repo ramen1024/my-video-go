@@ -79,8 +79,12 @@ func TestComputeETag(t *testing.T) {
 	if ComputeETag(a) == ComputeETag(b) {
 		t.Fatal("0xFF 分隔符应区分字段拼接歧义")
 	}
-	if ComputeETag(a) != ComputeETag(a) {
-		t.Fatal("同列表 ETag 应稳定")
+	// 稳定性：**内容相同**的两次输入必须产出同一指纹。
+	// 写成 ComputeETag(a) != ComputeETag(a) 是恒假比较（SA4000），
+	// 什么都测不到——因此这里复制一份再比。
+	unchanged := append([]VideoFile(nil), a...)
+	if ComputeETag(a) != ComputeETag(unchanged) {
+		t.Fatal("同内容列表的 ETag 应稳定")
 	}
 	if len(ComputeETag(a)) != 64 {
 		t.Fatal("应为 64 位小写 hex")

@@ -48,10 +48,16 @@ func TestConstructorsWithoutFormatArgs(t *testing.T) {
 }
 
 func TestAppErrorIsError(t *testing.T) {
-	var err error = InvalidPath("x")
-	if err == nil {
+	// 经由接口再断言"非 nil"：若直接写 `var err error = InvalidPath("x")`，
+	// staticcheck 能静态看出它是具体类型、err==nil 恒假（SA4023），
+	// 而这里的意图正是"**契约**保证构造函数绝不返回 nil error"——
+	// 走一次 append 之类的接口通道能让该断言真正可被违反。
+	var errs []error
+	errs = append(errs, InvalidPath("x"))
+	if errs[0] == nil {
 		t.Fatal("InvalidPath 返回值不能是 nil error")
 	}
+	err := errs[0]
 	var target *AppError
 	if !errors.As(err, &target) {
 		t.Fatal("errors.As 应能从 error 接口取回 *AppError")

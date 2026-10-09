@@ -122,7 +122,7 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 	return &models.ShareServerInfo{IPs: s.ips, Port: s.port}, nil
 }
 
-// Stop 优雅停止：等待在途请求排空，总超时 constants.ServerStopTimeoutSecs。
+// Stop 优雅停止：等待在途请求排空，总超时 constants.ServerStopTimeout。
 // 实例字段一并清空，Port 归零，下次 Start 从干净状态开始。
 //
 // 排空超时时**强制**关闭剩余连接：否则调用方会以为"已停止"、状态机也回到
@@ -137,7 +137,7 @@ func (s *Server) Stop() error {
 	s.ln = nil
 	s.port = 0
 
-	ctx, cancel := context.WithTimeout(context.Background(), constants.ServerStopTimeoutSecs)
+	ctx, cancel := context.WithTimeout(context.Background(), constants.ServerStopTimeout)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		slog.Warn("优雅停止超时，强制关闭剩余连接", "err", err)

@@ -225,8 +225,11 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - `frontend/pnpm-workspace.yaml` 的 `allowBuilds: esbuild: true` 不能删：pnpm 11 只读
   该文件，不放行会让 `pnpm install` 直接报 `ERR_PNPM_IGNORED_BUILDS`
 - Cargo→Go 的等价物速查：`cargo check`→`go vet ./...`；`cargo test`→`go test ./...`；
-  `cargo fmt --check`→`gofmt -l .` 应无输出；`cargo clippy -D warnings`→无直接等价
-  （可引入 golangci-lint）
+  `cargo fmt --check`→`gofmt -l .` 应无输出；`cargo clippy -D warnings`→**staticcheck**
+  （CI 已接入，`go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...`，钉版本以免
+  CI 升级工具后冒出全库新告警；升级版本是显式动作——本地清零告警后再改这个号）。
+  `-race` 需要 gcc（CGO），本机与 CI 的 windows-latest 都没装，跑不了；
+  并发正确性目前只能靠逻辑测试与静态审查。
 
 ## Windows-specific
 
