@@ -2,6 +2,108 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式。
 
+## [0.4.0] - 2026-10-10
+
+### 修复
+
+- 点「开启共享」后立刻关窗会无提示崩溃：`share.Server.Start` 的 goroutine 直接读
+  `s.srv`/`s.ln` 字段，而 `Stop` 会把它们置 nil——只要 `Stop` 抢在该 goroutine 被
+  调度之前执行，`Serve` 就在 nil 接收者上解引用。改为捕获局部变量；
+  `player.Server` 是同一写法，一并改掉。顺带补齐端口校验（port 为负时
+  `net.Listen` 会退化成绑随机端口；port 过大时错误文案拼成 `%!w(<nil>)`）
+- 选中 junction / 卷挂载点目录时静默"扫描完成、0 个视频"：`filepath.WalkDir`
+  内部用 `os.Lstat`，而 junction 的 Lstat 类型为 0（既非目录也非符号链接），
+  遍历在第 1 个条目就结束且不报错。媒体库用 `<盘>:\Videos` → `<盘>:\Media`
+  很常见，现在用户显式选中的根目录会被正常展开（junction 的**子**目录仍不展开）
+- 双击播放一个名为 `movie.mp4`、实为指向 `payload.exe` 的符号链接会把 .exe
+  交给系统播放器启动：`PlayVideo` 只校验了**链接名**的扩展名，而
+  `ResolveVideoPath` 会跟随符号链接。现在解析后再校验**目标文件**的扩展名
+- `OpenURL` 把任意字符串透传给 ShellExecute，`file:///...` 或自定义协议的入参
+  会被交给对应关联程序执行；现在只放行 http/https 且必须有主机名
+- 随机密码有取模偏差：16 位随机值直接 `% 10000`，而 65536 = 6×10000 + 5536，
+  低段 5536 个数概率高出约 16.5%。改为拒绝采样，并加分段均值的分布回归测试
+  （已实测旧实现红灯、新实现连跑五次稳定）
+- `/video/*` 用 `strings.Contains` 匹配整条错误文本判断路径穿越，而文本里含
+  被请求的文件名：名为 "escapes from parent.mp4" 的普通文件**不存在**时被误判
+  成 403 而非 404。改为只比对 `*os.PathError.Err` 那一层
+- `/videos` 列表与共享目录分两个 atomic 发布，两次写之间存在窗口：
+  `/video/*` 会拿新列表的 relative_path 去解析旧根目录而得到伪 404。
+  现在合并为单一原子快照 `state.Snapshot{Videos, ETag, FolderPath}`
+- `/auth` 免鉴权却无请求体读超时（`ReadHeaderTimeout` 只管请求头），发完头不发体
+  即可永久占住 goroutine 与 socket。新增 `AuthBodyReadTimeout`
+- `SetPasswordEnabled(true)` 不清空已有 session：保护关闭期间 `/auth` 仍可领
+  token，等用户开启保护后继续用。现在开启时吊销全部会话
+- `logging.rotate` 改名失败后仍把 size 归零，而文件实际仍是超限大小，要再写满
+  一整个阈值才会重试轮转；改为保留 size 让每次写都重试
+- `/refresh` 的 429/400 分支漏了 `Cache-Control: no-store`（只有 202 设了）；
+  改为在 handler 最前面统一设置
+- 停止共享超时时旧连接仍在被服务、状态机却已回到 Stopped，紧接着的 Start 会在
+  同一端口叠一个服务器；现在超时即强制 `Close()`
+- `localips.Get` 按引用返回缓存切片，任何调用方改动都会悄悄改写冻结的 Host
+  白名单；改为返回副本
+- `frontend/index.html` 之外，`wails dev` 之外，`pnpm dev` 纯前端模式下所有 API
+  请求 404 到 Vite 自身：补上到 `127.0.0.1:6010`（webpreview 默认端口）的代理
+
+### 变更
+
+- `internal/state` 列表快照与共享目录合并为单一原子快照；`SetScanResult` 成为
+  扫描完成的唯一发布点，`SetVideos`/`SetFolderPath` 保留为"只换一半"的变体
+- `if-None-Match` 按 RFC 9110 支持 `*`、逗号列表与弱校验符（此前整串全等）
+- `share.Server`、`player.Server` 的 `Serve` goroutine 捕获局部 `srv`/`ln`，
+  不再读取可能被 `Stop` 置 nil 的字段
+- `cmd/webpreview` 密码配置改放本次运行专属的临时目录（原先落在共享的 `%TEMP%`，
+  上一次预览设的密码会被这一次继承），并用 `signal.NotifyContext` 取代
+  `select{}`，让 defer 真正执行（日志刷盘、目录清理）
+- `player_windows.go` 补 `Process.Release()`，进程句柄不再等 finalizer 回收
+- `/auth` 移除冗余的 `CleanupOnce()`：该端点免鉴权、可被反复打，却要抢 `m.mu`
+  遍历两张表做重复劳动（`Authenticate` 内部已清理失败记录，session 由后台循环负责）
+- 前端 `videos` 改用 `$state.raw`：普通 `$state` 的读取值是 Proxy，而
+  `loadVideos()` 返回普通数组，导致"列表未变化就跳过更新"的优化恒不生效，
+  每次轮询都整表重渲染
+- `VideoTable` 的 virtualizer count 同步改用 `$effect.pre`（渲染前），
+  消除"过滤/排序后首帧用旧索引渲染"的窗口
+- 补齐表格 ARIA 语义（table/rowgroup/row/columnheader/cell + `aria-sort` +
+  `aria-rowcount`）、`aria-pressed`、`role="alert"`；行上不再用 `role="button"`
+  （与 row 冲突，且读屏器不再播报列），改由行内带文件名的播放按钮承担键盘可达性
+- `.dismiss-btn`、`.sr-only` 样式集中到 `buttons.css`（原在两个组件里各写一份）
+
+### 安全
+
+- `PlayVideo` 符号链接目标扩展名校验（见上）
+- `OpenURL` 仅放行 http/https（见上）
+- `verifyPassword` 钳制 PHC 串里的 `m`/`t`/`p`：这些值来自本地配置文件，
+  而 `argon2.IDKey` 对 `t=0`/`p=0` 会 panic（"配置损坏静默重置"只覆盖了非法
+  JSON，没覆盖合法 JSON 里的坏参数）；现在只接受与编译期常量一致的值
+- `password.Close` 用 `sync.Once` 包裹，二次调用不再 panic
+
+### 构建与文档
+
+- CI/release 接入 **staticcheck**（`go run ...@v0.8.1`，钉版本），按其告警改名
+  `ServerStopTimeoutSecs` → `ServerStopTimeout`；`isRootDirectory` 补全 `C:`、
+  `\\server\share`、`\\?\C:\` 等写法；`isPathEscape`、`ComputeETag` 等处的
+  恒假比较与误导注释一并修正
+- `check-config-sync.mjs` 新增四类断言：`app.go` ↔ `AppBindings` 方法名与参数、
+  `docs/api.md` 里复述的常量值、"扫描已取消"跨语言文案、`canPlayType` 不得出现在
+  代码中（剥注释后匹配）；`check-web-build.mjs` 强断言产物至少引用 1 个 JS 入口
+  与 1 个 CSS（`<script>` 整个消失时引用列表为空，旧检查会打绿勾）
+- `README` 修正 Go 版本要求（1.27+，原先写 1.25 编不过）、Wails CLI 钉到 v2.16.0，
+  安全一节补上"回环播放服务器不校验密码"这一取舍；`docs/api.md` 修正监听地址
+  （绑 `0.0.0.0`，非界面展示的 IP）、405/404 语义、`Vary` 的完整规则，
+  新增桌面端回环 `/video/*` 一节与 `/refresh-status` 的单槽语义说明
+- `AGENTS.md` 同步以上全部约束；修正 `AppBindings`（svelte-check 抓不到漏改）与
+  `localips`（cacheTTL 复用 constants）两处会把后来人带错的表述
+
+### 已知取舍（本次明确化，非本次引入）
+
+- 桌面端内联播放走 `127.0.0.1` 的回环服务器，**不校验访问密码**：同一台电脑上
+  的其他程序/用户会话可绕过密码读流（局域网其他设备不可达）。README 安全一节
+  与 `docs/api.md` 已写明
+- `/refresh-status` 是单槽模型：两个客户端几乎同时刷新时，后轮询者可能读到
+  前者那次扫描的统计值（列表内容本身是共享的）。`docs/api.md` 已说明为何
+  有意不引入刷新 id
+- `Accept-Encoding: *` 视为"不接受 gzip"（RFC 9110 语义上应接受），浏览器均会
+  显式发送 gzip，故保持现状并在注释与测试中锁定
+
 ## [0.3.0] - 2026-10-10
 
 ### 修复
