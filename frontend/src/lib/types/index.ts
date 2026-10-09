@@ -47,12 +47,6 @@ export interface ScanReport {
   skipped_small_truncated: boolean;
 }
 
-/** 扫描结果：视频列表 + 本次扫描报告 */
-export interface ScanResult {
-  videos: VideoFile[];
-  report: ScanReport;
-}
-
 /** 共享服务器状态，对应 Go ShareStatus（webview 重载后恢复界面用） */
 export interface ShareStatus {
   /** 服务器是否正在运行 */
@@ -88,11 +82,17 @@ export function parseAppError(e: unknown): string {
   if (typeof e === "string") {
     return e;
   }
+  if (e instanceof Error) {
+    // 网页端的平台层抛的是标准 Error（如"无法连接到服务器"）
+    return e.message;
+  }
   if (typeof e === "object" && e !== null) {
     const err = e as Record<string, unknown>;
     if (typeof err.message === "string" && err.message.length > 0) {
       return err.message;
     }
   }
-  return String(e);
+  // 兜底：至少不要把 "[object Object]" 直接给用户看
+  const text = String(e);
+  return text === "[object Object]" || text === "" ? "发生未知错误" : text;
 }

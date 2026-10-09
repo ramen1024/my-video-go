@@ -75,18 +75,22 @@ export const desktop: Platform = {
   canOpenWithSystemPlayer: true,
   listPollIntervalMs: null,
 
-  init() {
+  async init() {
     // 幂等：端口在应用生命周期内不变，取一次即可
-    initPromise ??= bindings()
-      .GetVideoServerPort()
-      .then((port) => {
+    // 必须保留 async：bindings() 在 window.go 缺失时会**同步**抛错，
+    // 若本方法是同步的，该异常不会变成 rejected promise，调用方的
+    // `await platform.init()` 也捕获不到（表现为未处理的 Promise 拒绝，
+    // 且后续的 restoreBackendState 等初始化步骤被静默跳过）。
+    initPromise ??= (async () => {
+      try {
+        const port = await bindings().GetVideoServerPort();
         // 0 表示回环服务器启动失败：视为未取得，videoSrc 返回空串，
         // 由 <video> 的 error 事件统一回退系统播放器
         videoServerPort = port > 0 ? port : null;
-      })
-      .catch((e) => {
+      } catch (e) {
         console.error("获取回环播放服务器端口失败，内联播放将回退系统播放器:", e);
-      });
+      }
+    })();
     return initPromise;
   },
 

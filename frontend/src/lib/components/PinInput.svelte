@@ -3,6 +3,8 @@
   4 位数字密码输入面板，保持清晰的状态反馈，避免过度动效。
 -->
 <script lang="ts">
+  import { onDestroy } from "svelte";
+
   interface Props {
     submitting: boolean;
     errorMsg: string;
@@ -14,6 +16,8 @@
   let { submitting, errorMsg, success, onSubmit, onClear }: Props = $props();
 
   let pinInput = $state("");
+  // Set 不会被 Svelte 的 $state 代理（proxy 只代理普通对象/数组），
+  // 因此这里靠"每次赋一个全新的 Set"触发更新，而不是靠 .add() 的变更通知。
   let maskedIndices = $state<Set<number>>(new Set());
   let maskTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -21,15 +25,20 @@
     if (maskTimer) { clearTimeout(maskTimer); maskTimer = null; }
   }
 
+  // 卸载时必须清掉待触发的遮罩计时器，否则它会写进已销毁的组件
+  onDestroy(clearTimers);
+
   function handleDigit(digit: string) {
     if (submitting || pinInput.length >= 4) return;
     const idx = pinInput.length;
     pinInput += digit;
-    maskedIndices = new Set(maskedIndices);
 
     clearTimers();
     maskTimer = setTimeout(() => {
-      maskedIndices = new Set([...maskedIndices, idx]);
+      // 复制一份再改：直接 .add() 不会触发响应式更新
+      const next = new Set(maskedIndices);
+      next.add(idx);
+      maskedIndices = next;
     }, 500);
 
     if (pinInput.length === 4) {

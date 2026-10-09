@@ -47,7 +47,9 @@ export function isInlinePlayableContainer(ext: string): boolean {
  * 示例: 1536 → "1.5 KB", 1073741824 → "1 GB"
  */
 export function formatFileSize(bytes: number): string {
-  if (bytes === 0) return "0 B";
+  // 负数/NaN/Infinity 的防护：Math.log 会给出 NaN，进而 sizes[NaN] → "NaN undefined"。
+  // 当前调用方的数据来自 Go 的 int64，属于防御性兜底。
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const k = 1024;
   const sizes = ["B", "KB", "MB", "GB", "TB"];
   // 超出最大单位时按最大单位显示，避免数组越界返回 undefined

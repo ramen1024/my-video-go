@@ -18,9 +18,12 @@
   let qrAbortController: AbortController | null = null;
 
   $effect(() => {
-    if (!selectedIp && shareInfo.ips.length > 0) {
+    // 只在"当前选中的 IP 仍可用"时保留它。之前仅判断 selectedIp 为空，
+    // 于是 shareInfo.ips 被替换（重新共享后网卡地址变了）而旧 IP 已消失时，
+    // 二维码与跳转链接会一直指向一个不可达的地址。
+    if (!shareInfo.ips.includes(selectedIp)) {
       // 默认选择第一个 IP（主网卡地址，通常是局域网访问地址）
-      selectedIp = shareInfo.ips[0];
+      selectedIp = shareInfo.ips[0] ?? "";
     }
   });
 

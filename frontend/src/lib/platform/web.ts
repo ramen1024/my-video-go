@@ -50,7 +50,10 @@ function toVideoItem(summary: VideoSummary): VideoItem {
     name: summary.name,
     relativePath: summary.relative_path,
     size: summary.size,
-    modified: summary.modified,
+    // 与 desktop.ts 的映射保持一致：Go 侧"获取失败"用空串表示，
+    // 而 VideoItem.modified 的契约是 string | null（"可能缺失"）。
+    // 不归一化的话同一份数据在桌面端是 null、在网页端是 ""。
+    modified: summary.modified || null,
     extension: summary.extension,
   };
 }

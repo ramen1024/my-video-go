@@ -4,7 +4,7 @@
   环境差异由 $lib/platform 提供的后端与 platform.kind 决定。
 -->
 <script lang="ts">
-  import { onMount, onDestroy } from "svelte";
+  import { onMount } from "svelte";
   import { platform, type VideoItem } from "$lib/platform";
   import type { PasswordStatus, ScanReport, ShareServerInfo } from "$lib/types";
   import { parseAppError } from "$lib/types";
@@ -21,7 +21,11 @@
 
   const isDesktop = platform.kind === "desktop";
 
-  let videos = $state<VideoItem[]>([]);
+  // videos 用 $state.raw：列表整体替换，元素本身从不原地修改。
+  // 若用普通 $state，读取拿到的是 Proxy，而 platform.loadVideos() 返回的是普通
+  // 数组，于是下方 refreshList 的 `next !== videos` **恒为真**——"列表未变化时
+  // 跳过更新"的优化会失效，每次轮询都整表重渲染。
+  let videos = $state.raw<VideoItem[]>([]);
   let currentFolder = $state("");
   let isScanning = $state(false);
   let errorMsg = $state("");
@@ -46,8 +50,14 @@
   let isStoppingShare = $state(false);
   let passwordStatus = $state<PasswordStatus>({ enabled: false, has_password: false });
   let pollTimer: ReturnType<typeof setInterval> | null = null;
+  /** 原生目录对话框正在打开：防止连点开出两个对话框、起两次扫描 */
+  let isPicking = $state(false);
 
   async function selectFolder() {
+    // 原生目录对话框是模态的但调用可重入：连点两次会开出两个对话框，
+    // 且第二次扫描会撞上 ScanGuard 报"扫描正在进行中"
+    if (isPicking) return;
+    isPicking = true;
     try {
       const selected = await platform.pickFolder();
       if (!selected) return;
@@ -59,6 +69,8 @@
       await doScan();
     } catch (e) {
       errorMsg = "选择文件夹失败: " + parseAppError(e);
+    } finally {
+      isPicking = false;
     }
   }
 
@@ -263,14 +275,12 @@
         console.error("刷新列表失败:", e);
       });
     }, interval);
+    // 清理在 effect 的 teardown 里做（组件卸载时 Svelte 也会调用它），
+    // 不需要再挂一个 onDestroy 做同一件事
     return () => {
       if (pollTimer) clearInterval(pollTimer);
       pollTimer = null;
     };
-  });
-
-  onDestroy(() => {
-    if (pollTimer) clearInterval(pollTimer);
   });
 </script>
 
@@ -290,6 +300,7 @@
     {currentFolder}
     {isStartingShare}
     {isStoppingShare}
+    {isPicking}
     canPickFolder={platform.canPickFolder}
     canShare={platform.canShare}
     onSelectFolder={selectFolder}
@@ -342,7 +353,7 @@
         <p>{platform.canPickFolder ? "请选择文件夹以扫描视频文件" : "共享文件夹中暂无可播放的视频"}</p>
       </div>
     {:else}
-      <VideoTable {videos} onPlay={playVideo} preferInlinePlayback={(v) => platform.preferInlinePlayback(v)} />
+      <VideoTable {videos} onPlay={playVideo} preferInlinePlayback={platform.preferInlinePlayback} />
     {/if}
   </div>
 </main>

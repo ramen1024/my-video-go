@@ -14,6 +14,8 @@
     onStopShare: () => void;
     isStartingShare: boolean;
     isStoppingShare: boolean;
+    /** 原生目录对话框是否正在打开（用于禁用按钮，避免连点开出两个对话框） */
+    isPicking: boolean;
     /** 是否提供"选择文件夹"入口（网页端无法访问客户端文件系统） */
     canPickFolder: boolean;
     /** 是否提供局域网共享控制（网页端自身就是被共享方） */
@@ -30,6 +32,7 @@
     onStopShare,
     isStartingShare,
     isStoppingShare,
+    isPicking,
     canPickFolder,
     canShare,
   }: Props = $props();
@@ -42,9 +45,9 @@
   </div>
   <div class="actions">
     {#if canPickFolder}
-      <button class="btn btn-primary" onclick={onSelectFolder} disabled={isScanning}>
+      <button class="btn btn-primary" onclick={onSelectFolder} disabled={isScanning || isPicking}>
         <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-        选择文件夹
+        {isPicking ? "选择中..." : "选择文件夹"}
       </button>
     {/if}
     {#if !canPickFolder || currentFolder}

@@ -4,6 +4,7 @@
   密码能力只有桌面端提供，统一经 Platform 访问（网页端不会渲染本组件）。
 -->
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import { platform } from "$lib/platform";
   import type { PasswordStatus } from "$lib/types";
   import { parseAppError } from "$lib/types";
@@ -23,6 +24,15 @@
   let pwdSubmitting = $state(false);
   let pwdCopied = $state(false);
   let pwdSuccess = $state(false);
+
+  // 两个延时状态复位都要能取消：组件可能在计时期间被卸载（停止共享会隐藏本面板）
+  const copiedTimer = { id: null as ReturnType<typeof setTimeout> | null };
+  const successTimer = { id: null as ReturnType<typeof setTimeout> | null };
+
+  onDestroy(() => {
+    if (copiedTimer.id) clearTimeout(copiedTimer.id);
+    if (successTimer.id) clearTimeout(successTimer.id);
+  });
 
   let passwordEnabled = $derived(passwordStatus.enabled);
   let hasPassword = $derived(passwordStatus.has_password);
@@ -48,7 +58,8 @@
     try {
       await navigator.clipboard.writeText(knownPassword);
       pwdCopied = true;
-      setTimeout(() => { pwdCopied = false; }, 1500);
+      if (copiedTimer.id) clearTimeout(copiedTimer.id);
+      copiedTimer.id = setTimeout(() => { pwdCopied = false; }, 1500);
     } catch (e) {
       onError("复制失败: " + parseAppError(e));
     }
@@ -83,10 +94,12 @@
       const status = await platform.getPasswordStatus();
       onStatusChange(status);
       pwdSuccess = true;
-      setTimeout(() => {
+      if (successTimer.id) clearTimeout(successTimer.id);
+      successTimer.id = setTimeout(() => {
         pwdErrorMsg = "";
         pwdSuccess = false;
         pwdPanelExpanded = false;
+        successTimer.id = null;
       }, 1200);
     } catch (e) {
       pwdErrorMsg = "设置失败: " + parseAppError(e);

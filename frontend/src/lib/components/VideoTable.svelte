@@ -81,7 +81,10 @@
     getItemKey: (index) => displayVideos[index]?.relativePath ?? index,
   });
 
-  $effect(() => {
+  // 必须用 $effect.pre（渲染**前**同步 count）：普通 $effect 在渲染后才跑，
+  // 于是过滤/排序让列表变短的那一次渲染仍会拿到旧范围的 index，
+  // 渲染出一个不存在的行（表现为偶发丢行，靠模板里的 {#if video} 兜住）。
+  $effect.pre(() => {
     get(virtualizer).setOptions({
       count: displayVideos.length,
       getItemKey: (index) => displayVideos[index]?.relativePath ?? index,
