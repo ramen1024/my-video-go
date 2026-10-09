@@ -142,6 +142,57 @@ for (const [tsName, goName] of pairs) {
   }
 }
 
+// ---------- 2b. 文档里复述的常量值必须与 Go 一致 ----------
+
+// docs/api.md 把 Go 侧的限流/session/端口参数又写了一遍（给外部调用者看的契约）。
+// 这类"同一个数字写两处、没有断言"的复述正是本脚本存在的理由：
+// 改了 constants.go 却忘了改文档，读者会按错的数字去写客户端。
+const apiMd = readFileSync(join(root, "docs/api.md"), "utf8");
+
+/** 断言文档里出现某个"值 + 单位"的组合，并说明它对应哪个 Go 常量 */
+function requireInDoc(source, pattern, what) {
+  if (!pattern.test(source)) {
+    fail(`docs/api.md 未包含 ${what}（期望匹配 ${pattern}）——改 Go 常量时必须同步文档`);
+  }
+}
+
+const maxFailed = goNumber(constantsGo, "MaxFailedAttempts");
+const lockSecs = goNumber(constantsGo, "LockDurationSecs");
+const sessionSecs = goNumber(constantsGo, "SessionDurationSecs");
+const refreshCooldown = goNumber(constantsGo, "RefreshCooldownSecs");
+const maxPortAttempts = goNumber(constantsGo, "MaxPortAttempts");
+const maxAuthBody = goNumber(constantsGo, "MaxAuthBodySizeBytes");
+
+// session 时长：Go 用秒，文档写"1 小时"这样的自然语言，只校验小时数
+requireInDoc(
+  apiMd,
+  new RegExp(`（${Math.round(sessionSecs / 3600)} 小时）`),
+  `session 有效期（${sessionSecs}s = ${Math.round(sessionSecs / 3600)} 小时）`,
+);
+// 限流：连续 N 次失败后锁 M 秒
+requireInDoc(
+  apiMd,
+  new RegExp(`连续 ${maxFailed} 次失败后锁 ${lockSecs} 秒`),
+  `IP 限流文案（连续 ${maxFailed} 次失败后锁 ${lockSecs} 秒）`,
+);
+// 刷新冷却
+requireInDoc(
+  apiMd,
+  new RegExp(`${refreshCooldown} 秒冷却`),
+  `/refresh 冷却时间（${refreshCooldown} 秒）`,
+);
+// 端口尝试次数
+requireInDoc(apiMd, new RegExp(`最多 ${maxPortAttempts} 个`), `端口重试次数（最多 ${maxPortAttempts} 个）`);
+// /auth 请求体上限（Go 用字节，文档写 KB）
+requireInDoc(
+  apiMd,
+  new RegExp(`请求体超过 ${Math.round(maxAuthBody / 1024)}KB`),
+  `/auth 请求体上限（${maxAuthBody} 字节 = ${Math.round(maxAuthBody / 1024)}KB）`,
+);
+// 默认端口出现在 Host 校验示例里
+const defaultPort = goNumber(constantsGo, "DefaultSharePort");
+requireInDoc(apiMd, new RegExp(`\\[::1\\]:${defaultPort}`), `默认端口示例（${defaultPort}）`);
+
 // ---------- 3. IP 缓存 TTL：localips 必须复用 constants，不得另立常量 ----------
 
 // 曾在这里声明过一份 `cacheTTL = 300`，注释理由是"避免循环依赖"——并不成立
@@ -199,6 +250,6 @@ if (changelogVersion !== productVersion) {
 
 console.log(
   `✓ 配置一致性校验通过：INLINE(${inlineExts.length}) ⊆ VIDEO_TYPES(${videoExts.length})，` +
-    `绑定方法 ${goBindings.size} 个两侧一致，端口/体积常量一致，IP 缓存 TTL 单一来源，` +
-    `版本号 v${productVersion} 三处一致`,
+    `绑定方法 ${goBindings.size} 个两侧一致，端口/体积常量与 docs/api.md 复述一致，` +
+    `IP 缓存 TTL 单一来源，版本号 v${productVersion} 三处一致`,
 );
