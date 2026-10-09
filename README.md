@@ -70,6 +70,10 @@
 - 访问密码经加密后保存在本机（`%AppData%\video-scanner-go`）；局域网登录每
   30 秒最多尝试 3 次，输错会短暂锁定，无法穷举
 - 局域网共享是明文 HTTP，适合家庭网络使用；请不要在公共 WiFi 下开启共享
+- **已知取舍**：桌面端在应用内播放时，会用本机回环地址（`127.0.0.1` 上的随机端口）
+  的临时小服务器把视频喂给播放器。该服务器**不校验访问密码**，因此同一台电脑上
+  的其他程序或用户会话可以绕过密码读到正在共享的视频。它只监听回环地址，
+  局域网里的其他设备连不上；不想有这个面时，关掉「局域网共享」即可
 
 ## 常见问题
 
@@ -97,12 +101,12 @@
 <details>
 <summary><b>构建与开发</b>（点开）</summary>
 
-依赖：Go 1.25+、Node 22+、pnpm 11、[Wails v2 CLI](https://wails.io)、WebView2 运行时
-（Windows 11 自带）。
+依赖：Go 1.27+、Node 22+、pnpm 11、[Wails v2 CLI](https://wails.io)、WebView2 运行时
+（Windows 11 自带）。Go 版本以 `go.mod` 为准。
 
 ```bash
-# 安装 Wails CLI
-go install github.com/wailsapp/wails/v2/cmd/wails@latest
+# 安装 Wails CLI（钉在与 go.mod/CI 相同的 v2.16.0，避免 CLI 生成的工程结构漂移）
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
 
 # 开发（前端热重载 + Go 重编译）
 wails dev

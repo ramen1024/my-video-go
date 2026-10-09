@@ -2,8 +2,8 @@
   VideoPlayer 组件
   全屏视频播放器，背景压暗，让视频成为绝对视觉焦点。
 
-  播放地址由调用方通过 videoSrc 注入：桌面端是 asset 协议（本机文件），
-  网页端是 /video/<relativePath>（HTTP 流式服务）。
+  播放地址由调用方通过 videoSrc 注入：桌面端是 http://127.0.0.1:<port>/video/<path>
+  （本机回环 HTTP 服务器，见 internal/player），网页端是 /video/<path>。
 -->
 <script lang="ts">
   import { onMount } from "svelte";

@@ -1,8 +1,9 @@
 # HTTP API 文档
 
 本文档描述“视频扫描器”局域网共享功能对外暴露的 HTTP 端点。所有请求均由应用内嵌的
-Go `net/http` 服务器处理，默认监听由应用界面显示的本地 IP 与端口（端口被占用时从
-`DEFAULT_SHARE_PORT` 起自动向后尝试，最多 5 个）。
+Go `net/http` 服务器处理，监听 `0.0.0.0`（即所有网卡）上的端口，端口被占用时从
+`DEFAULT_SHARE_PORT` 起自动向后尝试，最多 5 个。界面上展示的“本地 IP”是**对外广播
+用的可访问地址**（也是 Host 白名单的内容），并非服务器的绑定地址。
 
 网页端加载的正是桌面端同一份前端构建产物（`GET /` 返回的 `index.html` 及其
 `/assets/*` 静态资源），数据由下列 JSON 接口提供。
@@ -142,9 +143,13 @@ Session Cookie 属性：`HttpOnly; SameSite=Strict; Path=/`，有效期与服务
 避免重复传输与重渲染。
 
 **压缩：** 客户端带 `Accept-Encoding: gzip` 时，`/videos`、`/refresh-status`、`/auth`
-三个 JSON 接口会返回 `Content-Encoding: gzip`，并附 `Vary: Accept-Encoding`
-（同一个 `ETag` 对应两种字节表示，缺 `Vary` 会让中间缓存串味）。`q=0` 表示显式拒绝，
-此时返回明文。`304` 响应不压缩且不带 `Content-Encoding`，但仍会带 `Vary`。
+三个 JSON 接口会返回 `Content-Encoding: gzip`；`q=0` 表示显式拒绝，此时返回明文。
+`304` 响应不压缩且不带 `Content-Encoding`。
+
+以上所有情况都会带 `Vary: Accept-Encoding`——**包括未压缩的那次响应**：同一个 `ETag`
+对应两种字节表示，只要有一侧缺 `Vary`，中间缓存就可能把压缩体喂给不支持压缩的
+客户端（或反之）。不在白名单内的路径（`/video/*`、静态资源、登录页）不声明 `Vary`，
+因为它们的表示不随编码变化。
 
 **不压缩的端点：** `/video/*`（视频已是压缩格式，且 Range 与 `Content-Length`
 语义不能被压缩层破坏）、静态资源、登录页。
@@ -245,7 +250,21 @@ Range: bytes=0-1048575
 
 ## 其他说明
 
-- 已知路径使用错误的 HTTP 方法（如 `POST /videos`）返回 `405 Method Not Allowed`。
-- 其他未匹配路径返回 `404 Not found`。
+- **方法不匹配**（如 `POST /videos`、`PUT /anything`）返回 `405 Method Not Allowed`
+  并带 `Allow: GET, HEAD`。注意 `GET /` 在路由表里匹配任意路径，因此**任何**非 GET
+  请求、无论路径是否存在，都会先命中这条 405，而不是 404。
+- GET 请求的未匹配路径返回 `404 Not found`。
 - 所有响应都带 `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer` 与
   `X-Frame-Options: DENY`。
+
+## 桌面端内联播放（不在上述局域网接口内）
+
+桌面端在应用内播放视频时，不走上面的共享服务器，而是由 `internal/player` 在
+`127.0.0.1` 的**随机端口**上另起一个回环 HTTP 服务器，只路由 `/video/` 到同一个
+`share.VideoHandler`（因此路径校验、扩展名白名单与 Range 行为完全一致）。
+前端经 `App.GetVideoServerPort` 取得端口后拼出
+`http://127.0.0.1:<port>/video/<encoded relativePath>`。
+
+**该回环服务器不做鉴权**：webview 内的 `<video>` 请求不携带会话 Cookie，共享密码对
+它不生效。它只监听回环地址（局域网设备不可达），但同一台机器上的其他程序或用户
+会话可以绕过密码拉流。这是换取"桌面端与网页端共用同一套流式实现"的有意取舍。

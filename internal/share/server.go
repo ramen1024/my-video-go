@@ -24,8 +24,8 @@ import (
 	"strconv"
 )
 
-// Server 是一台共享服务器实例。可以只构造不 Start（桌面端的
-// /video/* 资产中间件复用同一套路由处理，但不需要监听端口）。
+// Server 是一台共享服务器实例。可以只构造不 Start（测试与工具代码
+// 直接拿 Handler() 做 httptest，不需要监听端口）。
 type Server struct {
 	st     *state.AppState
 	pw     *password.Manager
@@ -149,7 +149,10 @@ func (s *Server) Stop() error {
 }
 
 // Handler 组装完整请求处理链：安全头 → Host 校验（防 DNS rebinding）→
-// 会话鉴权 → 路由。桌面端资产中间件只复用其中的路由部分。
+// 会话鉴权 → 路由。
+//
+// 导出的唯一原因是测试需要直接拿它做 httptest（生产里只由 Start 使用；
+// 桌面端内联播放走 internal/player 的独立回环服务器，不再复用本 Handler）。
 //
 // 注意 Host 白名单在 Start 时冻结（s.ips）：运行期间本机网络变化（DHCP
 // 换址、Wi-Fi 漫游）后，新 IP 上的请求会被 403，对外展示的 IP 同样过期，

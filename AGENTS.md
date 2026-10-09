@@ -6,6 +6,7 @@
 |--------|---------|
 | Dev (全栈, 前端热重载) | `wails dev` |
 | Dev (仅前端, 网页端桩) | `cd frontend && pnpm dev` |
+| Dev (网页端离线预览, 推荐) | `go run ./cmd/webpreview -dir frontend/dist [视频文件夹]` |
 | Type check + 一致性校验 | `cd frontend && pnpm check` |
 | 前端构建（含产物校验） | `cd frontend && pnpm build` |
 | 构建应用 | `wails build`（产出 `build/bin/视频扫描器.exe`） |
@@ -63,7 +64,13 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   `sortByNameLower`（预计算小写键 + 只排序索引）；
   **不要**改回比较器里调 `strings.ToLower`（每次比较分配两个临时字符串，分配量随
   n log n 增长）。性能数字请现测而不是引用注释：`go test -bench SortByNameLower ./internal/scanner/`
-  （5000 条约 0.59ms / 5006 allocs，比较器版约 1.12ms / 12234 allocs）
+  （5000 条约 0.59ms / 5006 allocs，比较器版约 1.12ms / 12234 allocs）。
+  **用户选中的目录本身是 junction/卷挂载点时必须展开**（媒体库常见：
+  `<盘>:\Videos` → `<盘>:\Media`）：`WalkDir` 内部用 `os.Lstat`，而 junction 的
+  Lstat 类型为 0（既非目录也非符号链接），直接交给它会在第 1 个条目就结束、
+  返回"成功、0 个视频"。`isReparsePointDir` 识别该组合后改为逐个遍历子项；
+  junction 的**子**目录仍不展开，对目录外内容的遍历边界没有被放宽
+  （`TestScanJunctionRootExpands` 锁定）
 - `password/` — Argon2id（m=19456,t=2,p=1）、4 位数字校验、session、IP 限流、
   `password_config.json` 持久化（0600）。`enabled` 是 `atomic.Bool` 而非 `mu` 保护的
   字段：`Enabled()` 在 `withAuth` 的每请求路径上（含每个视频 Range），走 mu 会让
@@ -77,8 +84,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   把会话过期误报成解码失败。**不要**改回统一 302
 - `player/` — 桌面端内联播放专用的**回环 HTTP 服务器**（127.0.0.1 随机端口，
   只路由 `/video/` 到 `share.VideoHandler`）
-- `state/` — AppState：atomic.Pointer 快照（列表+ETag、共享信息、刷新结果）、
-  服务器状态机（Stopped→Starting→Running→Stopping）、扫描/刷新 CAS 守卫
+- `state/` — AppState：atomic.Pointer 快照（**列表+ETag+共享目录三元组**、共享信息、
+  刷新结果）、服务器状态机（Stopped→Starting→Running→Stopping）、扫描/刷新 CAS 守卫。
+  列表与目录必须**一次发布**（`SetScanResult`）：分成两个 atomic 会有窗口，让
+  `/video/*` 拿新列表的 relative_path 去解析旧根目录而得到伪 404
 - `localips/` — 本机全局 IPv4 枚举（5 分钟缓存，过滤回环/链路本地）。缓存 TTL 直接用
   `constants.IPCacheTTLSecs`，**不要**另立 `cacheTTL`（旧注释称"避免循环依赖"并不成立：
   `constants` 只 import `time`）。`check-config-sync.mjs` 会断言这一点
@@ -99,9 +108,14 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - **wails CLI 是开发/构建的必需品**（`wails dev` / `wails build`），但仓库不提交任何
   `wailsjs/` 生成物：`desktop.ts` 直接声明 `AppBindings` 接口并经 `window.go` 调用，
   `pnpm check` 无需 wails CLI。改 Go 方法签名后**没有**自动同步，必须手改
-  `AppBindings`（svelte-check 会抓漏改）
-- `frontend/dist/.gitkeep` 是有意提交的：`go:embed all:frontend/dist` 在 dist 不存在时
-  编译失败；真实构建会与 `.gitkeep` 并存
+  `AppBindings`。注意 `AppBindings` 是 `desktop.ts` 里自声明的局部接口，与 `app.go`
+  之间**没有**任何机器可查的联系——svelte-check **抓不到**漏改（改名后 TS 照样编译
+  通过，只在运行时炸），因此 `scripts/check-config-sync.mjs` 里加了一条
+  `app.go` ↔ `AppBindings` 的方法名/参数个数断言来兜住
+- `frontend/public/.gitkeep` 与 `frontend/dist/.gitkeep` 都是有意的：`go:embed
+  all:frontend/dist` 在 dist 不存在时编译失败；而 Vite 的 `emptyOutDir` 每次构建都会
+  清空 dist，dist 里的 `.gitkeep` 正是靠 `publicDir` 拷贝机制在每次构建后原样回来
+  （两者提交于同一次提交，名字与内容一致）
 - **`internal/share/theme.css` 是 `frontend/src/lib/styles/theme.css` 的副本**（go:embed
   无法引用模块外文件）：`TestLoginTemplateInvariants` 逐字节比对两者，不一致即红灯；
   改前端主题后必须重新拷贝
@@ -118,8 +132,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - **`/video/*` 走 `os.OpenRoot` 做路径包含检查**，不要再写 `EvalSymlinks` + 前缀比较
   （实测完整 HTTP 路径 2203µs → 746µs、allocs 154 → 38）。两个语义差异必须记住：
   ① `os.Root` **拒绝绝对符号链接**（即便指向目录内部），`ResolveVideoPath` 仍用旧逻辑，
-     因为桌面端 `PlayVideo` 要绝对路径交给系统播放器；② 逃逸错误靠匹配错误文本
-  `"escapes from parent"` 识别（标准库的 `errPathEscapes` 未导出），
+     因为桌面端 `PlayVideo` 要绝对路径交给系统播放器；② 逃逸错误靠错误文本识别
+  （标准库的 `errPathEscapes` 未导出），但**只比对 `*os.PathError.Err` 那一层**：
+     错误全文里含被请求的文件名，对全文做 `strings.Contains` 会把名为
+     `escapes from parent.mp4` 的普通文件误判成穿越（404 变 403）。
      `isPathEscape` 是与 Go 内部实现耦合的一处，升级 Go 要用
      `TestVideoEscapeAttemptsStillForbidden` 复核。
   **不要**为缓存 `*os.Root` 而改造 `state`：Windows 上长期持有目录句柄会让用户
@@ -158,9 +174,17 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - 桌面端与网页端共用 `share.VideoHandler`（含 `ResolveVideoPath` 路径校验与扩展名
   白名单）；Range/416 由 `http.ServeContent` 保证，不要手写
 - 服务器状态机与停止：`StartServerStarting`/`StartServerStopping` CAS 守卫状态转换；
-  停止 = `http.Server.Shutdown`（5 秒超时优雅排空）。**不要**绕过状态机直接起停服务器
+  停止 = `http.Server.Shutdown`（5 秒超时优雅排空），**超时则强制 `Close()` 断开剩余
+  连接**——否则调用方以为"已停止"、状态机回到 Stopped，旧连接却还在被服务，
+  紧接着的 Start 会在同一端口叠一个服务器。**不要**绕过状态机直接起停服务器
   —— get_share_status 恢复界面依赖 Running 状态与 share_info
-- 端口被占用自动 +1 重试最多 5 个（`MaxPortAttempts`），不可越过 65535
+- `share.Server.Start` 的 `Serve` goroutine **必须捕获局部 `srv`/`ln`**，不能读
+  `s.srv`/`s.ln` 字段：`Stop` 会把字段置 nil，而 goroutine 未必已被调度——
+  Start 后立刻 Stop 会 panic 在 `net/http.(*Server).Serve` 的 nil 接收者上
+  （`TestStartStopImmediately` 锁定）
+- 端口被占用自动 +1 重试最多 5 个（`MaxPortAttempts`），不可越过 65535；
+  **传 0 表示交给系统挑端口**（测试与预览用），此时不做自增重试，
+  对外信息里的端口以 `ln.Addr()` 为准（沿用请求值会广播出 `:0`）
 - `/refresh`（**POST**，改状态的请求不用 GET）的 202 + 后台 goroutine + 5 秒冷却 +
   `refresh_result` 单值模型；
   `/refresh-status` 以 `pending` 字段表示"尚无结果"，前端不解析 message 文案
@@ -170,9 +194,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   relativePath，绝对路径解析在服务端完成（`share.ResolveVideoPath`，跟随符号链接但
   不得逃逸共享目录）
 - **Go 侧返回给前端的切片绝不能是 nil**：nil 经 JSON 序列化是 `null`，前端对响应
-  直接 `.map` 会抛 TypeError。`state.SetVideos` 已把 nil 归一化为空切片，`/videos`
-  的 handler 也从空切片起步；新增返回列表的绑定/端点时同样注意（TS 侧另有 `?? []`
-  兜底，但别依赖它）
+  直接 `.map` 会抛 TypeError。`state.SetScanResult` 已把 nil 归一化为空切片，
+  `SetFolderPath` 单独调用时也给出空切片（否则快照里的列表会是 nil），`/videos`
+  的 handler 同样从空切片起步；新增返回列表的绑定/端点时注意
+  （TS 侧另有 `?? []` 兜底，但别依赖它）
 - 密码配置 JSON 损坏时静默重置为默认（丢密码、禁用保护），pepper 缺失则重新生成——
   与 Tauri 版行为一致；写入走 `writeFileAtomic`（tmp + rename + Sync），
   **不要**改回直接 `os.WriteFile`（崩溃留下截断 JSON 恰好触发静默重置）

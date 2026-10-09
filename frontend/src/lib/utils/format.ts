@@ -27,7 +27,7 @@
  * 即便列入，也可能因文件内的编码而不被支持（HEVC 视频轨、AC3 音轨等），
  * 且解码能力随平台而变（Windows 的 WebView2 是 Chromium 系、支持 Matroska；
  * macOS 的 WKWebView 不支持）。所以内置播放**必须**允许失败回退，
- * 见 `Platform.preferInlinePlayback` 与 `+page.svelte` 的 `handlePlaybackFailure`。
+ * 见 `Platform.preferInlinePlayback` 与 `App.svelte` 的 `handlePlaybackFailure`。
  */
 const INLINE_PLAYABLE_EXTENSIONS = ["mp4", "m4v", "mkv", "webm", "mov"];
 

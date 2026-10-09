@@ -8,9 +8,9 @@
         * { margin: 0; padding: 0; box-sizing: border-box; }
 
         /*
-          设计令牌由服务端在响应时注入同一个 theme.css（见 server/handler.rs 的
-          render_login_page）。此处不再自带第二份 :root 定义：两套令牌一旦分叉，
-          改主题时必然漏掉其中一处。
+          设计令牌由服务端在响应时注入同一份 theme.css（见 internal/share/login.go
+          的 renderLoginPage 与包内 theme.css 副本）。此处不再自带第二份 :root 定义：
+          两套令牌一旦分叉，改主题时必然漏掉其中一处。
         */
         /* {theme_tokens} */
 

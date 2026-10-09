@@ -34,7 +34,11 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusNotFound, "Not found")
 		return
 	}
-	// embed.FS 的文件实现了 io.ReadSeeker，ServeContent 借此支持 If-Modified-Since
+	// embed.FS 的文件实现了 io.ReadSeeker，ServeContent 需要它。
+	//
+	// 注意：**不要**指望 ServeContent 发出 Last-Modified / 支持 If-Modified-Since：
+	// embed.file 的 ModTime() 恒为零值，setLastModified 会直接跳过，这些文件
+	// 因此永远没有时间戳校验器，只有上面的 Cache-Control 在起作用。
 	rs, ok := f.(io.ReadSeeker)
 	if !ok {
 		writeText(w, http.StatusNotFound, "Not found")

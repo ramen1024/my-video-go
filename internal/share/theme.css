@@ -2,9 +2,16 @@
  * 设计令牌（Design Tokens）
  *
  * 统一的颜色 / 圆角 / 字体 / 阴影体系，是本项目**唯一的颜色来源**：
- * Svelte 组件直接 `import` 本文件，登录页（`src-tauri/src/login_template.html`）
- * 由服务端在响应时把本文件注入它的 `theme_tokens` 占位符
- * （见 `src-tauri/src/server/handler.rs` 的 `render_login_page`）。
+ * Svelte 组件直接 `import` 本文件；登录页（`internal/share/login.html`）由
+ * `internal/share/login.go` 在响应时把本文件注入它的 `{theme_tokens}` 占位符。
+ *
+ * ⚠️ 本文件在仓库里有**两份**：这一份，以及 `internal/share/theme.css`
+ * （go:embed 无法引用模块外文件，只能复制）。两者必须逐字节一致，
+ * 由 `internal/share/server_test.go` 的 TestLoginTemplateInvariants 锁定——
+ * 改完这里必须重新拷贝过去，否则测试与构建都会红灯。
+ *
+ * 令牌的消费方不止 SPA：`--warning*`、`--scrim*`、`--shadow-card` 等只被登录页
+ * 使用。它们**不是**死代码，不要因为"SPA 里没用到"就删掉。
  *
  * 原则：
  * - 层级靠明度递进：bg → surface → surface-hover/raised/pressed
