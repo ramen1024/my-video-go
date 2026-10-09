@@ -99,7 +99,11 @@ func IsSupportedVideoExtension(ext string) bool {
 	return ok
 }
 
-// VideoTypes 返回清单的副本（供测试与一致性脚本核对）。
+// VideoTypes 返回清单的副本，供测试校验"改动副本不会污染包内映射"。
+//
+// 注意 scripts/check-config-sync.mjs **不用**它：那个脚本跑在 Node 里，
+// 解析的是 constants.go 的源码文本（而且还要同时读前端的 format.ts）。
+// 所以"给一致性脚本用"不是保留它的理由，别照抄这句。
 func VideoTypes() map[string]string {
 	out := make(map[string]string, len(videoTypes))
 	for k, v := range videoTypes {
