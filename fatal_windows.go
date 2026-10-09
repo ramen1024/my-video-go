@@ -14,13 +14,17 @@ import (
 // user32.dll 的 MessageBoxW：GUI 程序唯一可靠的错误呈现方式。
 var procMessageBoxW = windows.NewLazySystemDLL("user32.dll").NewProc("MessageBoxW")
 
-// 消息框标志位
+// MessageBoxW 的 uType 标志位（取自 WinUser.h 的 MB_* 常量）。
+//
+// 这里只列真正影响呈现的四个：MB_OK 按钮、错误图标、置顶、抢前台焦点。
+// 不要再加"让弹窗居中"之类的位——MessageBoxW 没有居中标志
+// （0x00000800 在 WinUser.h 里是 DS_CENTER/MF_SEPARATOR 等别的含义，
+// 出现在 MB_DEFMASK 区间内但无对应 MB_ 常量）；hwnd 传 0 时系统本就居中。
 const (
 	mbOk            = 0x00000000
 	mbIconError     = 0x00000010
 	mbTopMost       = 0x00040000
 	mbSetForeground = 0x00010000
-	mbDialogCenter  = 0x00000800
 )
 
 // showFatalError 用系统消息框报告致命错误，然后退出。
@@ -57,7 +61,7 @@ func showFatalError(logPath string, err error) {
 		0,
 		uintptr(unsafe.Pointer(body)),
 		uintptr(unsafe.Pointer(title)),
-		mbOk|mbIconError|mbTopMost|mbSetForeground|mbDialogCenter,
+		mbOk|mbIconError|mbTopMost|mbSetForeground,
 	)
 	os.Exit(1)
 }

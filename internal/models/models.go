@@ -7,7 +7,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"io"
 	"my-video-go/internal/constants"
 )
 
@@ -76,23 +75,40 @@ type PasswordStatus struct {
 // HTTP 层使用时外层再包一对引号。0xFF 分隔符防止字段拼接歧义
 // （"ab"+"c" 与 "a"+"bc" 必须产生不同指纹）。
 //
-// 用 io.WriteString 而非 h.Write([]byte(s))：后者每个字符串字段都要
-// 分配一个临时切片（2000 条列表 = 2000 次多余分配），前者对 hash.Hash
-// 有 io.StringWriter 快路径，零分配。
+// 字符串字段走可复用的栈缓冲（scratch）而不是 io.WriteString：
+//
+//	sha256.New() 返回的具体类型 *sha256.Digest 没有 WriteString 方法
+//	（io.StringWriter 断言为 false），io.WriteString 只会退化成
+//	w.Write([]byte(s)) —— 而且那次 []byte(s) 转换发生在 io 包的接口调用里，
+//	逃逸分析无法把它放到栈上，于是**每个字段一次堆分配**。
+//
+// 不要"优化"成 io.WriteString / fmt.Fprint 之类的写法，那会把每条记录的
+// 分配从 0 次变成 2 次（2000 条：3 次分配 → 4004 次，耗时约 1.7×）。
+// 对照实现与基准见 etag_bench_test.go 的 computeETagWriteString /
+// BenchmarkComputeETagWriteString。
 func ComputeETag(videos []VideoFile) string {
 	h := sha256.New()
 	var buf [8]byte
+	// 128 字节覆盖常见相对路径；超出长度的走 []byte(s)，避免缓冲增长的额外拷贝。
+	var scratch [128]byte
 	putUint64 := func(n uint64) {
 		binary.BigEndian.PutUint64(buf[:], n)
 		h.Write(buf[:])
 	}
+	putString := func(s string) {
+		if len(s) <= len(scratch) {
+			h.Write(append(scratch[:0], s...))
+			return
+		}
+		h.Write([]byte(s))
+	}
 	putUint64(uint64(len(videos)))
 	for _, v := range videos {
-		io.WriteString(h, v.RelativePath)
+		putString(v.RelativePath)
 		h.Write([]byte{0xFF})
 		putUint64(uint64(v.Size))
 		h.Write([]byte{0xFF})
-		io.WriteString(h, v.Modified)
+		putString(v.Modified)
 		h.Write([]byte{0xFF})
 	}
 	return hex.EncodeToString(h.Sum(nil))

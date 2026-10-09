@@ -63,18 +63,28 @@ func (w *rotatingWriter) rotate() {
 // 最终生效的路径回报给调用方（启动失败时要告诉用户去哪看日志）。
 //
 // 返回的 LogPath 在日志不可用时为空串。
+//
+// 注意副作用：本函数替换 slog 全局默认 logger，测试调用后必须还原。
 func Setup(dir, name string) (closeFn func(), logPath string) {
+	return setup(dir, name, os.TempDir())
+}
+
+// setup 是 Setup 的可测试内核：回退目录由调用方传入。
+//
+// 之所以不让测试直接走 Setup：回退落点是 %TEMP%\<name>.log，与真实运行中的
+// 应用实例同名同路径，测试会把内容写进用户的真实日志文件并触发它的轮转。
+func setup(dir, name, fallbackDir string) (closeFn func(), logPath string) {
 	path := filepath.Join(dir, name+".log")
 	file, err := newRotatingWriter(path)
 	if err != nil {
-		// 首选路径失败（目录权限不足/被占用）：退到 %TEMP%
-		fallback := filepath.Join(os.TempDir(), name+".log")
+		// 首选路径失败（目录权限不足/被占用）：退到回退目录（生产环境是 %TEMP%）
+		fallback := filepath.Join(fallbackDir, name+".log")
 		slog.Error("日志文件打开失败，尝试回退到临时目录",
 			"path", path, "err", err, "fallback", fallback)
 		path = fallback
 		file, err = newRotatingWriter(path)
 		if err != nil {
-			// %TEMP% 也不行：只能退回控制台（此时启动失败会走 MessageBox 兜底）
+			// 回退目录也不行：只能退回控制台（此时启动失败会走 MessageBox 兜底）
 			slog.Error("临时目录日志也不可写，降级为仅控制台输出",
 				"path", path, "err", err)
 			slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, nil)))
