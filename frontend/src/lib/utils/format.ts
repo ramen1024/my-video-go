@@ -42,6 +42,19 @@ export function isInlinePlayableContainer(ext: string): boolean {
 }
 
 /**
+ * 列表里只显示日期部分
+ *
+ * 后端的 `modified` 是 `"2006-01-02 15:04:05"`（见 internal/models 的契约注释），
+ * 19 个字符整串塞进列表列要么挤压文件名、要么在窄列里换行；而浏览视频库时
+ * 秒级精度没有决策价值。完整时间戳由调用方放进单元格的 `title`。
+ *
+ * `modified` 可能为 null（后端取 mtime 失败时），此时给一个占位符。
+ */
+export function formatDateOnly(modified: string | null): string {
+  return modified ? modified.slice(0, 10) : "-";
+}
+
+/**
  * 将字节数格式化为人类可读的文件大小字符串
  *
  * 示例: 1536 → "1.5 KB", 1073741824 → "1 GB"

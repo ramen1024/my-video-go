@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <link rel="icon" type="image/png" href="/favicon.png">
     <title>视频扫描器 - 密码验证</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -15,7 +16,7 @@
         /* {theme_tokens} */
 
         body {
-            font-family: "Segoe UI", "Microsoft YaHei", "PingFang SC", -apple-system, BlinkMacSystemFont, sans-serif;
+            /* 字体栈与基准字号来自注入的 theme.css（与 SPA 同一份），不再各写一套 */
             background: var(--bg);
             min-height: 100vh;
             min-height: 100dvh;
@@ -42,22 +43,22 @@
             margin-bottom: 28px;
         }
 
-        .lock-icon {
-            width: 52px;
-            height: 52px;
-            margin: 0 auto 14px;
-            color: var(--accent-light);
+        .brand-mark {
+            width: 56px;
+            height: 56px;
+            margin: 0 auto 16px;
+            display: block;
         }
 
         .login-title {
-            font-size: 20px;
-            font-weight: 700;
+            font-size: var(--fs-2xl);
+            font-weight: 600;
             color: var(--text);
             margin-bottom: 6px;
         }
 
         .login-subtitle {
-            font-size: 13px;
+            font-size: var(--fs-md);
             color: var(--text-secondary);
         }
 
@@ -117,10 +118,23 @@
             75% { transform: translateX(4px); }
         }
 
-        .banner {
-            text-align: center;
+        /*
+          两条提示互斥（密码错误 / 锁定倒计时），因此叠在同一个定高槽里。
+          此前两者都留在文档流中，各自占 32~34px 的不可见高度——PIN 与键盘之间
+          凭空多出 117px 死区，而且提示出现/消失会把整个键盘往下推再弹回来。
+        */
+        .banner-slot {
+            position: relative;
+            height: 34px;
             margin-bottom: 16px;
-            min-height: 0;
+        }
+
+        .banner {
+            position: absolute;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
             opacity: 0;
             transform: translateY(-6px);
             transition: opacity 0.2s ease, transform 0.2s ease;
@@ -305,7 +319,24 @@
 <body>
     <div class="login-card">
         <div class="login-header">
-            <svg class="lock-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+            <!--
+              品牌标识「进度圆盘」：与 build/appicon.png / favicon.png / SPA 头部同一母图。
+              原先是一把通用挂锁，和应用没有任何识别关系；"要密码"这件事已经由副标题
+              和下面的数字键盘表达了。
+              颜色一律走注入的 theme 令牌（本文件不得出现硬编码颜色）。
+            -->
+            <svg class="brand-mark" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" aria-hidden="true">
+                <defs>
+                    <linearGradient id="brandMarkFill" gradientUnits="userSpaceOnUse" x1="12" y1="1.13" x2="12" y2="22.87">
+                        <stop offset="0" style="stop-color: var(--accent)" />
+                        <stop offset="1" style="stop-color: var(--accent-deep)" />
+                    </linearGradient>
+                </defs>
+                <rect x="1.13" y="1.13" width="21.74" height="21.74" rx="4.87" style="fill: url(#brandMarkFill)" />
+                <path d="M6.838 4.628 A9 9 0 0 1 19.372 17.162" style="fill: none; stroke: var(--accent-light); stroke-width: 1.3" />
+                <circle cx="12" cy="12" r="7.2" style="fill: var(--white)" />
+                <polygon points="10.08,8.76 10.08,15.24 15.7,12" style="fill: url(#brandMarkFill)" />
+            </svg>
             <div class="login-title">视频扫描器</div>
             <div class="login-subtitle">请输入 4 位数字密码访问共享资源</div>
         </div>
@@ -317,17 +348,19 @@
             <div class="pin-box" id="box3"></div>
         </div>
 
-        <div class="banner" id="errorBanner">
-            <div class="banner-inner">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
-                <span id="errorMsg"></span>
+        <div class="banner-slot">
+            <div class="banner" id="errorBanner">
+                <div class="banner-inner">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line></svg>
+                    <span id="errorMsg"></span>
+                </div>
             </div>
-        </div>
 
-        <div class="banner warning" id="lockoutBanner">
-            <div class="banner-inner">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-                <span id="lockoutMsg"></span>
+            <div class="banner warning" id="lockoutBanner">
+                <div class="banner-inner">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                    <span id="lockoutMsg"></span>
+                </div>
             </div>
         </div>
 

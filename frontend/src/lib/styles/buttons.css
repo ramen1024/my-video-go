@@ -13,7 +13,7 @@
   gap: 6px;
   padding: 8px 14px;
   border: 1px solid transparent;
-  font-size: 13px;
+  font-size: var(--fs-md);
   font-weight: 500;
   cursor: pointer;
   transition: background-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
@@ -90,9 +90,14 @@
  *
  * 原先在 ErrorMessage.svelte 与 App.svelte 里各写了一份完全相同的规则；
  * 放到这里让两者共用（组件内的 <style> 是 scoped 的，无法互相复用）。
- * 用 :global 是因为使用方是别的组件（各自带自己的 scoped 属性）。
+ *
+ * ⚠️ 这里**不能**写 `:global(.dismiss-btn)`：本文件是普通 CSS，由组件的
+ * `import "$lib/styles/buttons.css"` 作为副作用模块引入，Svelte 编译器根本不处理它，
+ * `:global()` 会原样进入产物 —— 而它不是合法 CSS 选择器，浏览器把整条规则丢掉
+ * （曾经就是这样：关闭按钮的样式全部失效，渲染成系统默认按钮）。
+ * 全局样式直接写选择器即可，组件的 scoped 规则特异性更高，需要时照样能盖住它。
  */
-:global(.dismiss-btn) {
+.dismiss-btn {
   margin-left: auto;
   background: none;
   border: none;
@@ -107,12 +112,12 @@
   flex-shrink: 0;
 }
 
-:global(.dismiss-btn:hover) {
+.dismiss-btn:hover {
   opacity: 1;
 }
 
 /* 仅供读屏器的文本（视觉上不可见，但仍留在可访问性树里） */
-:global(.sr-only) {
+.sr-only {
   position: absolute;
   width: 1px;
   height: 1px;

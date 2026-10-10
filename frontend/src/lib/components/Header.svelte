@@ -40,7 +40,26 @@
 
 <header class="header">
   <div class="brand">
-    <svg class="brand-icon" xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+    <!--
+      品牌标识「进度圆盘」：白色圆盘挖出播放键，外圈一道亮蓝扫描弧。
+      与 build/appicon.png、frontend/public/favicon.png、build/windows/icon.ico 同一母图。
+      刻意不再用文件夹图元——那个形状同时是"选择文件夹"按钮和空状态的图标，
+      三种语义共用一个图形。
+      镂空不是真挖洞：三角形用**同一个** userSpaceOnUse 渐变填充，
+      于是它与方底在同一 y 上取到同一颜色，看起来就是透过去的。
+    -->
+    <svg class="brand-mark" viewBox="0 0 24 24" width="28" height="28" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="brandMarkFill" gradientUnits="userSpaceOnUse" x1="12" y1="1.13" x2="12" y2="22.87">
+          <stop offset="0" style="stop-color: var(--accent)" />
+          <stop offset="1" style="stop-color: var(--accent-deep)" />
+        </linearGradient>
+      </defs>
+      <rect x="1.13" y="1.13" width="21.74" height="21.74" rx="4.87" style="fill: url(#brandMarkFill)" />
+      <path d="M6.838 4.628 A9 9 0 0 1 19.372 17.162" style="fill: none; stroke: var(--accent-light); stroke-width: 1.3" />
+      <circle cx="12" cy="12" r="7.2" style="fill: var(--white)" />
+      <polygon points="10.08,8.76 10.08,15.24 15.7,12" style="fill: url(#brandMarkFill)" />
+    </svg>
     <h1 class="title">视频扫描器</h1>
   </div>
   <div class="actions">
@@ -77,7 +96,7 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 14px 0;
+    padding: 12px 0;
     gap: 16px;
   }
 
@@ -87,15 +106,17 @@
     gap: 10px;
   }
 
-  .brand-icon {
-    color: var(--accent);
+  .brand-mark {
+    display: block;
+    flex-shrink: 0;
   }
 
   .title {
-    font-size: 26px;
-    font-weight: 700;
+    font-size: var(--fs-2xl);
+    font-weight: 600;
     color: var(--text);
-    letter-spacing: -0.3px;
+    /* 不给中文标题加负字距：那是拉丁字母大字号的排版习惯，
+       套到"视频扫描器"上只会让字面互相挤压 */
   }
 
   .actions {
@@ -115,7 +136,6 @@
     .header {
       flex-direction: column;
       align-items: flex-start;
-      padding: 12px 0;
     }
 
     .actions {

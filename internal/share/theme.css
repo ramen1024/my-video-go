@@ -31,12 +31,15 @@
   --border-faint: rgba(255, 255, 255, 0.04);
   --border-strong: rgba(255, 255, 255, 0.1);
 
-  /* 文字 */
+  /* 文字（五级，靠明度而非色相分层）
+     对比度以最低的背景层 --surface 为基准算得，--bg 上更高：
+     secondary 7.2:1 / tertiary 5.7:1 / faint 4.7:1 —— 三级以上均可承载正文，
+     不必再为"这行字能不能看清"单独调透明度 */
   --text: #f8fafc;
   --text-strong: rgba(255, 255, 255, 0.9);
-  --text-secondary: rgba(255, 255, 255, 0.6);
-  --text-tertiary: rgba(255, 255, 255, 0.4);
-  --text-faint: rgba(255, 255, 255, 0.35);
+  --text-secondary: rgba(255, 255, 255, 0.62);
+  --text-tertiary: rgba(255, 255, 255, 0.52);
+  --text-faint: rgba(255, 255, 255, 0.46);
 
   /* 主色（蓝） */
   --accent: #3b82f6;
@@ -85,9 +88,40 @@
   --radius-sm: 8px;
 
   /* 字体 */
+  --font-sans: "Segoe UI", "Microsoft YaHei", "PingFang SC", -apple-system,
+    BlinkMacSystemFont, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* 字号阶梯：正文基准 13px（--fs-md），由下面的 body 规则落地。
+     没有它时表格单元格会静默继承浏览器默认的 16px，比工具栏还大 */
+  --fs-xs: 11px;
+  --fs-sm: 12px;
+  --fs-md: 13px;
+  --fs-lg: 14px;
+  --fs-xl: 16px;
+  --fs-2xl: 20px;
+  --fs-3xl: 22px;
 
   /* 阴影 */
   --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.6);
   --shadow-card: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+/**
+ * 基础排版与键盘焦点环
+ *
+ * 放在这里而不是 index.html 的内联样式里：登录页（internal/share/login.html）
+ * 注入的是同一份令牌，它自己的 body 规则在后面，因此只继承字号与字体栈，
+ * 排版仍由它自己控制。
+ */
+body {
+  font-family: var(--font-sans);
+  font-size: var(--fs-md);
+  line-height: 1.5;
+}
+
+/* :where() 使这条规则特异性为 0，组件需要自行处理焦点样式时可直接覆盖 */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent-light);
+  outline-offset: 2px;
 }

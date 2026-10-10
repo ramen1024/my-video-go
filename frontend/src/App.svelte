@@ -349,7 +349,7 @@
       </div>
     {:else if videos.length === 0}
       <div class="empty-state">
-        <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line><line x1="17" y1="17" x2="22" y2="17"></line></svg>
         <p>{platform.canPickFolder ? "请选择文件夹以扫描视频文件" : "共享文件夹中暂无可播放的视频"}</p>
       </div>
     {:else}
@@ -372,7 +372,7 @@
     align-items: baseline;
     gap: 8px;
     padding: 6px 0 12px;
-    font-size: 12px;
+    font-size: var(--fs-sm);
     border-bottom: 1px solid var(--border);
     margin-bottom: 12px;
   }
@@ -388,7 +388,7 @@
     border: 1px solid var(--border);
     border-radius: var(--radius-md);
     margin-bottom: 12px;
-    font-size: 13px;
+    font-size: var(--fs-md);
     /* 单行：文案只含数量与阈值，但窄窗口下仍要保证不换行把列表挤出视野 */
     flex-wrap: nowrap;
     white-space: nowrap;
@@ -437,7 +437,7 @@
   }
 
   .loading p {
-    font-size: 13px;
+    font-size: var(--fs-md);
   }
 
   .spinner {
@@ -460,16 +460,15 @@
     align-items: center;
     justify-content: center;
     height: 100%;
-    color: var(--text-faint);
+    color: var(--text-tertiary);
     padding: 32px;
-    gap: 12px;
+    gap: 14px;
   }
 
-  .empty-state svg {
-    opacity: 0.5;
-  }
-
+  /* 不再给图标叠 opacity：令牌本身已经按"最弱的一级"设计，
+     再乘 0.5 就掉到看不清了 */
   .empty-state p {
-    font-size: 13px;
+    font-size: var(--fs-md);
+    color: var(--text-secondary);
   }
 </style>

@@ -10,7 +10,7 @@
   import { createVirtualizer } from "@tanstack/svelte-virtual";
   import type { VideoItem } from "$lib/platform";
   import type { SortField, SortDirection } from "$lib/types";
-  import { formatFileSize } from "$lib/utils/format";
+  import { formatFileSize, formatDateOnly } from "$lib/utils/format";
 
   interface Props {
     videos: VideoItem[];
@@ -69,7 +69,8 @@
   /** 全部视频的总大小（不受搜索过滤影响，与"共 N 个视频"口径一致） */
   let totalSize = $derived(videos.reduce((sum, v) => sum + v.size, 0));
 
-  const ROW_HEIGHT = 56;
+  // 行高与正文（13px）相称：56px 是给"单元格静默继承浏览器默认 16px"时用的
+  const ROW_HEIGHT = 48;
 
   let scrollElement: HTMLDivElement | null = $state(null);
 
@@ -111,6 +112,20 @@
       e.preventDefault();
       onPlay(video);
     }
+  }
+
+  /**
+   * 显示名剥掉尾部扩展名
+   *
+   * 行右侧已经用徽章单独标了格式，名字里再带一遍就是同一信息写两次
+   * （"旧片段.avi" + ".AVI"）。只在结尾确实匹配该扩展名时才剥，
+   * 以免误伤 "v1.2final.mp4" 这类中间带点的名字；搜索仍按完整文件名匹配，
+   * 用户输 ".avi" 照样能搜到。
+   */
+  function displayName(name: string, ext: string): string {
+    if (!ext) return name;
+    const suffix = `.${ext}`;
+    return name.toLowerCase().endsWith(suffix.toLowerCase()) ? name.slice(0, -suffix.length) : name;
   }
 </script>
 
@@ -160,6 +175,7 @@
             {/if}
           </button>
         </div>
+        <!-- .sr-only 由 $lib/styles/buttons.css 全局提供（组件的 scoped 副本已删） -->
         <div class="col-action" role="columnheader"><span class="sr-only">操作</span></div>
       </div>
     </div>
@@ -178,12 +194,16 @@
               焦点在行内时也能触发播放。
             -->
             <div class="table-row" role="row" tabindex="0" style="height: {row.size}px; transform: translateY({row.start}px);" onclick={() => onPlay(video)} onkeydown={(e) => handleRowKeydown(e, video)}>
-              <div class="col-name" role="cell">
-                <span class="video-name">{video.name}</span>
-                <span class="video-ext">.{video.extension}</span>
+              <!-- title 给完整文件名：显示名既已剥掉扩展名、又会被截断，悬停是唯一能看到全文的地方 -->
+              <div class="col-name" role="cell" title={video.name}>
+                <span class="video-name">{displayName(video.name, video.extension)}</span>
+                <!-- 名字里的点已随扩展名一起剥掉，徽章不再重复前导点 -->
+                <span class="video-ext">{video.extension}</span>
               </div>
               <div class="col-size" role="cell">{formatFileSize(video.size)}</div>
-              <div class="col-date" role="cell">{video.modified || "-"}</div>
+              <div class="col-date" role="cell" title={video.modified || undefined}>
+                {formatDateOnly(video.modified)}
+              </div>
               <div class="col-action" role="cell">
                 {#if preferInlinePlayback(video)}
                   <button class="play-btn" onclick={(e) => { e.stopPropagation(); onPlay(video); }} onkeydown={(e) => e.stopPropagation()} aria-label="播放 {video.name}">
@@ -214,9 +234,11 @@
   }
 
   .video-count {
-    font-size: 13px;
+    font-size: var(--fs-md);
     color: var(--text-secondary);
     font-weight: 500;
+    /* 数字等宽：轮询刷新时数量变化不会让这一行左右跳动 */
+    font-variant-numeric: tabular-nums;
   }
 
   .search-box {
@@ -239,7 +261,7 @@
     padding: 7px 12px 7px 30px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-sm);
-    font-size: 13px;
+    font-size: var(--fs-md);
     background: var(--surface-hover);
     color: var(--text);
     transition: border-color 0.15s ease, background-color 0.15s ease;
@@ -251,6 +273,13 @@
     background: var(--surface-raised);
   }
 
+  /* 上一条用 outline: none 换掉浏览器默认环（鼠标点选时不该出现），
+     这里必须补回键盘焦点环——特异性与上面相同，靠源码顺序生效 */
+  .search-box input:focus-visible {
+    outline: 2px solid var(--accent-light);
+    outline-offset: 2px;
+  }
+
   .search-box input::placeholder {
     color: var(--text-faint);
   }
@@ -259,12 +288,15 @@
     padding: 32px 16px;
     text-align: center;
     color: var(--text-tertiary);
-    font-size: 13px;
+    font-size: var(--fs-md);
   }
 
   /* 表格语义容器：本身不产生视觉，只负责让 header 与可滚动 body 纵向排布
      （原来是两个并列的 flex 子项，现在被这个 role="table" 包了一层） */
   .video-table {
+    /* 列宽只在这里写一次：表头与行是两处 grid，此前各写一份字面量，
+       改一处就会让列错位 */
+    --grid-cols: minmax(180px, 1fr) 92px 116px 56px;
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -277,33 +309,21 @@
     flex-shrink: 0;
   }
 
-  /* 仅供读屏器的文本（列头"操作"没有可见标题） */
-  .sr-only {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    padding: 0;
-    margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    white-space: nowrap;
-    border: 0;
-  }
-
   .header-row {
     display: grid;
-    grid-template-columns: minmax(200px, 1fr) 100px 150px 64px;
+    grid-template-columns: var(--grid-cols);
     align-items: center;
   }
 
   .header-row > div {
-    padding: 11px 16px;
+    padding: 10px 16px;
     text-align: left;
     font-weight: 600;
     color: var(--text-secondary);
-    font-size: 11px;
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
+    font-size: var(--fs-sm);
+    /* 中文列头不做 text-transform：uppercase 对"文件名/大小/修改日期"
+       什么都不做，原来的 0.4px 字距是按拉丁小标题的习惯给的，稍收一点更贴合中文字面 */
+    letter-spacing: 0.02em;
   }
 
   .sort-btn {
@@ -349,7 +369,7 @@
     left: 0;
     width: 100%;
     display: grid;
-    grid-template-columns: minmax(200px, 1fr) 100px 150px 64px;
+    grid-template-columns: var(--grid-cols);
     align-items: center;
     box-sizing: border-box;
     border-bottom: 1px solid var(--border-faint);
@@ -361,12 +381,14 @@
     background: var(--surface-hover);
   }
 
+  /* 行高由 ROW_HEIGHT 决定，单元格不再用自己 padding 撑高度 */
   .table-row > div {
-    padding: 10px 16px;
+    padding: 0 16px;
+    font-size: var(--fs-md);
   }
 
   .col-name {
-    min-width: 200px;
+    min-width: 180px;
     display: flex;
     align-items: baseline;
     gap: 6px;
@@ -376,10 +398,15 @@
   .col-size {
     text-align: right;
     color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .col-date {
     color: var(--text-tertiary);
+    font-size: var(--fs-sm);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
   }
 
   .col-action {
@@ -392,13 +419,17 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    /* flex 子项默认 min-width:auto，不收到 0 就顶不开内容宽度，
+       上面的 ellipsis 永远不触发，长文件名是被父级硬裁的 */
+    min-width: 0;
   }
 
   .video-ext {
-    color: var(--text-faint);
-    font-size: 10px;
+    color: var(--text-tertiary);
+    font-size: var(--fs-xs);
     font-weight: 600;
     text-transform: uppercase;
+    letter-spacing: 0.04em;
     flex-shrink: 0;
   }
 
@@ -422,7 +453,7 @@
 
   .system-btn {
     padding: 5px 10px;
-    font-size: 11px;
+    font-size: var(--fs-xs);
     font-weight: 500;
     cursor: pointer;
     border: 1px solid var(--border-strong);
