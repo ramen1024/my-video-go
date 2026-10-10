@@ -105,6 +105,71 @@ func TestHostCheck(t *testing.T) {
 	}
 }
 
+// 注意：TestHostCheck 全程走 s.Handler() 并**手工注入 s.ips**，因此它测不到
+// Start 有没有把白名单接上——局域网访问 403 那个 bug 正是从这条测试旁边走过去
+// 的。端到端的覆盖在 TestStartWiresHostWhitelist。
+
+// TestStartWiresHostWhitelist 端到端验证：Start 之后，用它**自己广播出去的地址**
+// 作 Host 必须能访问。
+//
+// 这条测试存在的全部理由：Start 里 http.Server 的 Handler 一度读的是 s.ips，
+// 而 s.ips 在其后才赋值，于是白名单永远是 nil——本机用 127.0.0.1 一切正常，
+// 局域网设备用共享面板给的 IP 却全部 403 "Invalid Host header"。
+// 其余测试要么用 127.0.0.1 发请求，要么像上面那样被白盒注入过 s.ips，都抓不到。
+func TestStartWiresHostWhitelist(t *testing.T) {
+	st := state.New()
+	pw, err := password.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pw.Close)
+	s := New(st, pw, testAssets())
+
+	info, err := s.Start(0)
+	if err != nil {
+		t.Fatalf("Start 失败: %v", err)
+	}
+	t.Cleanup(func() { _ = s.Stop() })
+
+	// 必须挑非回环地址：127.0.0.1 会被 withHostCheck 的硬编码分支直接放过，
+	// 用它测不出白名单有没有接上
+	lan := ""
+	for _, ip := range info.IPs {
+		if ip != "127.0.0.1" && ip != "::1" && ip != "localhost" {
+			lan = ip
+			break
+		}
+	}
+	if lan == "" {
+		t.Skip("本机没有非回环 IPv4，无法验证对外地址的 Host 白名单")
+	}
+
+	get := func(host string) int {
+		req, err := http.NewRequest("GET", fmt.Sprintf("http://127.0.0.1:%d/videos", info.Port), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Host = host
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("请求 Host=%s 失败: %v", host, err)
+		}
+		defer resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.StatusCode
+	}
+
+	if code := get(lan); code != http.StatusOK {
+		t.Fatalf("用 Start 广播出去的 %s 作 Host 得到 %d：Host 白名单没接上"+
+			"（查 Start 里 buildHandler 传的是局部 ips 还是尚未赋值的 s.ips）", lan, code)
+	}
+	// 反向断言：不能为了修上面这条把校验整个删掉。
+	// 203.0.113.0/24 是文档保留段，不可能是本机网卡地址。
+	if code := get("203.0.113.7"); code != http.StatusForbidden {
+		t.Fatalf("非本机 Host 应 403，实得 %d", code)
+	}
+}
+
 func TestAuthDisabledEverythingOpen(t *testing.T) {
 	s, _ := newTestServer(t, false)
 	if w := doReq(s, "GET", "/videos", "", "", nil); w.Code != http.StatusOK {
@@ -267,6 +332,28 @@ func TestUnauthenticatedRequestSplit(t *testing.T) {
 		rw := doReq(s, c.method, c.target, "", cookie, c.header)
 		if rw.Code == http.StatusUnauthorized || rw.Code == http.StatusFound {
 			t.Fatalf("认证后 %s %s 应放行: %d", c.method, c.target, rw.Code)
+		}
+	}
+}
+
+// 标签页图标在登录页上也要能取到（登录页自包含，唯一的外部请求就是它）。
+// 豁免按**精确路径**匹配，不是前缀——前缀匹配会把 /favicon.png/… 之类也放行。
+func TestFaviconExemptFromAuth(t *testing.T) {
+	s, _ := newTestServer(t, true)
+
+	w := doReq(s, "GET", "/favicon.png", "", "", map[string]string{"Sec-Fetch-Dest": "image"})
+	if w.Code != http.StatusOK {
+		t.Fatalf("未认证访问 /favicon.png 应放行: %d", w.Code)
+	}
+	if w.Body.String() != "pngdata" {
+		t.Fatalf("favicon 响应体不对: %q", w.Body.String())
+	}
+
+	// 同前缀但非精确路径的，以及其它静态资源，仍须 401
+	for _, target := range []string{"/favicon.pngx", "/favicon.png/extra", "/assets/app-abc123.js"} {
+		rw := doReq(s, "GET", target, "", "", map[string]string{"Sec-Fetch-Dest": "image"})
+		if rw.Code != http.StatusUnauthorized {
+			t.Fatalf("未认证访问 %s 应 401: %d", target, rw.Code)
 		}
 	}
 }

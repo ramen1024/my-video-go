@@ -126,7 +126,15 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   （两者提交于同一次提交，名字与内容一致）
 - **`internal/share/theme.css` 是 `frontend/src/lib/styles/theme.css` 的副本**（go:embed
   无法引用模块外文件）：`TestLoginTemplateInvariants` 逐字节比对两者，不一致即红灯；
-  改前端主题后必须重新拷贝
+  改前端主题后必须重新拷贝。该文件除令牌外还带两条全局规则（`body` 的字体栈与
+  基准字号、全站 `:focus-visible` 焦点环），登录页注入的是同一份——它的 `body`
+  规则在注入内容**之后**，所以只继承字号/字体栈，排版仍由自己控制
+- **`:global()` 绝不能出现在 `frontend/src/lib/styles/*.css` 里**：那些是普通 CSS，
+  由组件的 `import "$lib/styles/buttons.css"` 作为副作用模块引入，Svelte 编译器
+  **不处理**它们，`:global(...)` 会原样进入产物，而它不是合法 CSS 选择器 →
+  浏览器把整条规则丢掉，样式静默失效（`.dismiss-btn` 就这样坏过一段时间，
+  提示条上的关闭按钮渲染成系统默认按钮）。全局规则直接写普通选择器；
+  产物里可以用 `grep -o ":global[^{]*{" dist/assets/*.css` 复核（应为空）
 - `internal/share/login.html` 有两条不变量测试：必须含裸 `<script>` 标签（nonce 注入
   依赖字符串替换）、不得出现 `#rgb` / `rgb(` / `rgba(` 硬编码颜色（颜色一律来自注入的
   theme 令牌）
@@ -201,6 +209,15 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   `s.srv`/`s.ln` 字段：`Stop` 会把字段置 nil，而 goroutine 未必已被调度——
   Start 后立刻 Stop 会 panic 在 `net/http.(*Server).Serve` 的 nil 接收者上
   （`TestStartStopImmediately` 锁定）
+- **同一个坑的另一半**：`Start` 里构造 `http.Server` 必须用 `s.buildHandler(ips)`
+  （局部 `ips`），不能写 `s.Handler()`。`s.ips` 在那之后才赋值，读字段会让 Host
+  白名单**永远是 nil**，于是局域网设备用共享面板给的 IP 全部 403
+  `Invalid Host header`，而本机 localhost 一切正常——症状就是"共享开了但别人打不开"。
+  既有测试一条都抓不到：它们全用 `127.0.0.1` 发请求（被 `withHostCheck` 的硬编码
+  分支放过），`TestHostCheck` 还手工注入过 `s.ips`（**白盒注入字段的测试等于没测装配**）。
+  现在由 `TestStartWiresHostWhitelist` 端到端锁住：真监听 + 真 HTTP 客户端 +
+  用 Start 自己广播出去的地址作 Host，另加"文档保留段 203.0.113.7 必须仍 403"
+  的反向断言（防止把校验整个删掉来"修"它）
 - 端口被占用自动 +1 重试最多 5 个（`MaxPortAttempts`），不可越过 65535；
   **传 0 表示交给系统挑端口**（测试与预览用），此时不做自增重试，
   对外信息里的端口以 `ln.Addr()` 为准（沿用请求值会广播出 `:0`）

@@ -99,8 +99,11 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 		listenPort = tcpAddr.Port
 	}
 
+	// Host 白名单必须由局部 ips 传进去，不能让 Handler 去读 s.ips：
+	// 字段要到下面才赋值，读字段会让白名单**永远是 nil**，于是局域网地址全部 403、
+	// 只有 localhost/127.0.0.1 能过。而所有测试都用 127.0.0.1 发请求，抓不到这条。
 	srv := &http.Server{
-		Handler:           s.Handler(),
+		Handler:           s.buildHandler(ips),
 		ReadHeaderTimeout: constants.HTTPReadHeaderTimeout,
 		IdleTimeout:       constants.HTTPIdleTimeout,
 	}
@@ -148,16 +151,22 @@ func (s *Server) Stop() error {
 	return nil
 }
 
-// Handler 组装完整请求处理链：安全头 → Host 校验（防 DNS rebinding）→
+// Handler 用实例当前的 Host 白名单组装请求链。
+//
+// 导出只为测试与工具代码能直接拿它做 httptest（生产里由 Start 使用，
+// 且走 buildHandler——见那里的说明）。未 Start 过时 s.ips 为 nil，
+// 此时只有 localhost/127.0.0.1/::1 能过 Host 校验。
+//
+// 桌面端内联播放不复用本 Handler：它走 internal/player 的独立回环服务器。
+func (s *Server) Handler() http.Handler { return s.buildHandler(s.ips) }
+
+// buildHandler 组装完整请求处理链：安全头 → Host 校验（防 DNS rebinding）→
 // 会话鉴权 → 路由。
 //
-// 导出的唯一原因是测试需要直接拿它做 httptest（生产里只由 Start 使用；
-// 桌面端内联播放走 internal/player 的独立回环服务器，不再复用本 Handler）。
-//
-// 注意 Host 白名单在 Start 时冻结（s.ips）：运行期间本机网络变化（DHCP
-// 换址、Wi-Fi 漫游）后，新 IP 上的请求会被 403，对外展示的 IP 同样过期，
-// 需停止并重新共享才能恢复。
-func (s *Server) Handler() http.Handler {
+// ips 显式作参数传入而不是读 s.ips：Host 白名单在 Start 时冻结，
+// 运行期间本机网络变化（DHCP 换址、Wi-Fi 漫游）后，新 IP 上的请求会被 403，
+// 对外展示的 IP 同样过期，需停止并重新共享才能恢复。
+func (s *Server) buildHandler(ips []string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /auth", s.handleAuth)
 	mux.HandleFunc("GET /login", s.handleLogin)
@@ -170,7 +179,7 @@ func (s *Server) Handler() http.Handler {
 
 	var h http.Handler = mux
 	h = withAuth(s.st, s.pw, h)
-	h = withHostCheck(s.ips, h)
+	h = withHostCheck(ips, h)
 	h = withGzip(h)
 	h = withSecurityHeaders(h)
 	return h

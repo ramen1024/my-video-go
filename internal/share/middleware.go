@@ -69,7 +69,7 @@ func hostWithoutPort(hostport string) string {
 // 播放器可回退），静态资源则会拿到一份无法解析的 HTML。前端 web.ts 的
 // isAuthFailure 同时认 redirect 与 401，两条路径都能识别会话失效。
 //
-// /auth 与登录页本身豁免；会话有效后访问登录页的行为由 handleLogin 处理（跳回 /）。
+// /auth、登录页与标签页图标豁免；会话有效后访问登录页的行为由 handleLogin 处理（跳回 /）。
 func withAuth(st *state.AppState, pw *password.Manager, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !pw.Enabled() {
@@ -77,7 +77,10 @@ func withAuth(st *state.AppState, pw *password.Manager, next http.Handler) http.
 			return
 		}
 		p := r.URL.Path
-		if p == "/auth" || p == "/login" || p == "/login.html" {
+		// favicon 也在豁免之列：登录页是自包含模板，唯一的外部请求就是标签页图标。
+		// 让它 401 的话，陌生设备上看到的第一个界面就带一个破图标。
+		// 按精确路径放行（不是前缀），它不含任何用户数据。
+		if p == "/auth" || p == "/login" || p == "/login.html" || p == "/favicon.png" {
 			next.ServeHTTP(w, r)
 			return
 		}
