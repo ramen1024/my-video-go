@@ -58,8 +58,10 @@ jobs:
       - name: staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 
-      - name: go test
-        run: go test ./...
+      # 与 ci.yml 相同的测试门槛（发版前必须同样干净）：只跑 -race，它是普通
+      # go test 的超集；windows-latest 自带 MinGW 供 CGO 使用
+      - name: go test -race
+        run: go test -race ./...
 
       # tag 名与产品版本号必须一致：不对的话会发布一个"自称别的版本"的 exe，
       # 而那时 tag 已经推了（已发布过的 tag 不宜原地重打）。

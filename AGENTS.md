@@ -11,7 +11,7 @@
 | 前端构建（含产物校验） | `cd frontend && pnpm build` |
 | 构建应用 | `wails build`（产出 `build/bin/视频扫描器.exe`） |
 | Go check | `go vet ./...` |
-| Go test | `go test ./...` |
+| Go test（CI 同款，含竞争检测） | `go test -race ./...` |
 | Go format | `gofmt -w .` |
 
 `pnpm dev` 已把 `/videos`、`/video`、`/refresh`、`/refresh-status`、`/auth`、`/login`
@@ -19,7 +19,8 @@
 完整功能的前端热重载；两边的端口要对应（`vite.config.ts` 里的 `BACKEND`）。
 
 CI（`.github/workflows/ci.yml`）在 `windows-latest` 上运行：`pnpm install --frozen-lockfile`
-→ `pnpm check` → `pnpm build` → gofmt 检查 → `go vet` → `go test` → `wails build`。
+→ `pnpm check` → `pnpm build` → gofmt 检查 → `go vet` → `go test -race` → `wails build`
+（只跑 `-race`，它是普通 `go test` 的超集）。
 **`wails build` 必须在 `pnpm build` 之后**（`go:embed all:frontend/dist` 要求 dist 存在产物；
 仓库里提交的 `frontend/dist/.gitkeep` 只是为了让 go.mod 能通过编译）。
 
@@ -185,8 +186,9 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - **`scripts/check-web-build.mjs` 必须断言"入口真的被引用"**：只校验
   "index.html 引用的资源都存在"是不够的——`<script>` 标签整个消失时引用列表为空，
   循环一次都不跑、照样打绿勾，而这正是白屏形态。现在强制至少 1 个 `.js` 与 1 个 `.css`
-- **发版改版本号要同时动三处**：`wails.json:14`（进 exe 版本资源）、
-  `frontend/package.json:4`、`CHANGELOG.md` 顶部的 `## [x.y.z] - 日期`。
+- **发版改版本号要同时动三处**：`wails.json` 的 `info.productVersion`（进 exe 版本
+  资源）、`frontend/package.json` 的 `version`、`CHANGELOG.md` 顶部的
+  `## [x.y.z] - 日期`。
   漏掉 CHANGELOG 是这里最常见的漂移，`check-config-sync.mjs` 会红灯。
   打 tag 即触发 `.github/workflows/release.yml` 构建并创建 Release，
   已发布过的 tag 不要原地重打（附件与已下载的人会对不上）
@@ -245,8 +247,11 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   `cargo fmt --check`→`gofmt -l .` 应无输出；`cargo clippy -D warnings`→**staticcheck**
   （CI 已接入，`go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...`，钉版本以免
   CI 升级工具后冒出全库新告警；升级版本是显式动作——本地清零告警后再改这个号）。
-  `-race` 需要 gcc（CGO），本机与 CI 的 windows-latest 都没装，跑不了；
-  并发正确性目前只能靠逻辑测试与静态审查。
+  `-race` 需要 gcc（CGO）：CI 的 windows-latest 自带 MinGW（无需安装步骤），
+  CI 里已跑 `go test -race ./...`；本机 MinGW 已在 PATH 里，直接
+  `go test -race ./...` 即可。
+  注意 race 只能发现"被测试**真正并发执行到**"的路径（e6bc616 的教训：
+  测试全绿≠没问题）——新增并发代码时必须同时补能并发触达它的测试。
 - **CI 的 Go 版本必须钉死，不能用 `stable`**（`setup-go` 的 `go-version: '1.27.1'`）。
   教训：staticcheck 靠读取**编译器导出数据**工作，该格式随 Go 版本递增——
   本机 1.27.1 产出 v4、staticcheck v0.8.1 支持到 v4，本地全绿；

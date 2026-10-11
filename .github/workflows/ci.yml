@@ -64,8 +64,12 @@ jobs:
       - name: staticcheck
         run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
 
-      - name: go test
-        run: go test ./...
+      # 只跑 -race（需要 CGO/gcc，windows-latest 自带 MinGW，setup-go 会自动
+      # 启用 CGO_ENABLED=1）：它是普通 go test 的超集，另跑一遍纯 go test 没有
+      # 意义。注意 race 只能发现"被测试真正并发执行到"的路径（见 e6bc616 教训：
+      # 测试全绿≠没问题），新加的并发代码必须同时补能并发触达它的测试。
+      - name: go test -race
+        run: go test -race ./...
 
       # 端到端编译验证：必须在 pnpm build 之后（go:embed 需要 frontend/dist 有产物）
       - name: 安装 Wails CLI
