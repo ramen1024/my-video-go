@@ -2,6 +2,33 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式。
 
+## [0.4.2] - 2026-10-14
+
+### 安全
+
+- **重新构建以纳入 Go 1.27.2 的 stdlib 安全修复**。v0.4.1 的 exe 由 Go 1.27.1
+  构建，而 go1.27.2 包含 `go` 命令与 `crypto/tls`、`html/template`、**`net/http`**、
+  `net/textproto`、**`os`** 的安全修复。Go 的 stdlib 是静态链进 exe 的，所以**用户手里
+  那份二进制里就带着旧版 stdlib**——而本应用恰好是一个局域网 HTTP 服务器
+  （`net/http` 见诸 16 个文件）加大量文件系统操作（`os` 见诸 15 个文件），
+  修复正落在最核心的两个包上。本版无应用代码改动，重新构建即是全部价值
+
+### 构建
+
+- **Go 1.27.1 → 1.27.2，staticcheck v0.8.1 → v0.8.2（五处同步）**。本机升级 Go 后
+  staticcheck v0.8.1 直接红灯，复现了 a7c9170 记录的
+  `export data version 5 is greater than maximum supported version 4`：staticcheck 读的是
+  **编译器导出数据**，该格式随 Go 版本递增（1.27.1 → v4，1.27.2 因泛型方法顺序
+  go.dev/issue/81188 新增字段而 → v5），v0.8.2 起才支持。检查同时钉在两处
+  workflow 的 `go-version`、两处的 staticcheck 版本号、以及 `go.mod` 的 `go` 指令上；
+  `go.mod` 那处不能漏——CI 上 `setup-go` 会设 `GOTOOLCHAIN=local` 所以失配会**硬报错**，
+  而开发机默认 `auto`，失配会被静默下载掩盖，于是"本机绿"不再代表 CI 绿
+- **CI 与 release 接入 `go test -race`**（见 v0.4.1 之后的首个提交）：此前并发正确性
+  只能靠人工审查，`player.Server` 就一直是数据竞争而测试全绿。只跑 `-race`
+  （它是普通 `go test` 的超集），windows-latest 自带 MinGW 供 CGO 使用
+- 升级 Go 的已知耦合点已复核：`internal/share/video.go` 的 `isPathEscape` 靠错误文本
+  识别 `os.Root` 的逃逸错误，1.27.2 的 `errPathEscapes` 文本未变
+
 ## [0.4.1] - 2026-10-10
 
 ### 修复
