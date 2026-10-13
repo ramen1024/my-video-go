@@ -267,11 +267,14 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   任何时间跑 CI 结果一致。
   **升级 Go 的步骤**：先本地装新 Go → 升 staticcheck 到兼容版 → `./...` 清零告警 →
   再同时改上面列的五处。
-  **`go.mod` 的 `go` 指令不能漏、也不能单独改**：只钉 `setup-go` 是不够的——
-  `GOTOOLCHAIN=auto` 下若 `go.mod` 要求更高版本，Go 会**自动下载并切换工具链**，
-  照样越过 `setup-go` 的钉死（实测：PATH 上只有 1.27.1、`go.mod` 写 1.27.2 时，
-  `go version` 报 1.27.2）；而两边不一致时它又会直接硬报
-  `go.mod requires go >= 1.27.2 (running go 1.27.1)`。所以要改一起改。
+  **`go.mod` 的 `go` 指令不能漏，但它与 `setup-go` 的失配在两侧表现相反**：
+  CI 上 `setup-go` 会设 `GOTOOLCHAIN=local`（run 日志里可见），所以那侧是**硬**钉死——
+  `go.mod` 要求更高时不会下载，直接报
+  `go.mod requires go >= 1.27.2 (running go 1.27.1; GOTOOLCHAIN=local)`；
+  而开发机的 `GOTOOLCHAIN` 默认是 `auto`，`go.mod` 要求更高版本时 Go 会**静默下载
+  并换用**那个工具链（实测 `GOTOOLCHAIN=go1.27.1+auto`——`auto` 的显式写法，
+  与默认语义一致：默认工具链 1.27.1 + `go.mod` 写 1.27.2 → `go version` 报 1.27.2），
+  于是"本机绿"不再代表 CI 绿——这正是第二次踩坑的形态。所以要改一起改。
 
 ## Windows-specific
 

@@ -31,11 +31,15 @@ jobs:
           # staticcheck v0.8.1 只支持到 v4，直接报
           # "export data version 5 is greater than maximum supported version 4"）。
           # 同时 wails build 用的也是这个 Go——钉死它才能保证任何人、任何时间
-          # 跑 CI 都得到同一结果。注意：go.mod 的 go 指令也必须与这里一致——
-          # 只钉 setup-go 是不够的，go.mod 要求更高版本时 GOTOOLCHAIN=auto 会
-          # 自动下载并切换工具链，照样能越过这行钉死。
-          # 升级 Go 时必须三处一起动：这里、release.yml、go.mod 的 go 指令，
-          # 外加 staticcheck 版本，并先在本地确认 `go run ...@<新版> ./...` 清零告警。
+          # 跑 CI 都得到同一结果。
+          # 注意 setup-go 会设 GOTOOLCHAIN=local（日志里可见），所以这行在 CI 上
+          # 是**硬**钉死：go.mod 要求高于它时不会自动下载，而是直接报
+          # "go.mod requires go >= X (running go Y; GOTOOLCHAIN=local)"。
+          # 危险的漂移在开发机：那里 GOTOOLCHAIN 默认 auto，go.mod 要求更高版本时
+          # Go 会静默下载并换用那个工具链，"本机绿"于是不再代表 CI 绿。
+          # 升级 Go 时必须五处一起动：这里与 release.yml 的 go-version、
+          # 两处的 staticcheck 版本、go.mod 的 go 指令，
+          # 并先在本地确认 `go run ...@<新版> ./...` 清零告警。
           go-version: '1.27.2'
           cache: true
 
