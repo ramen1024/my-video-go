@@ -13,6 +13,7 @@
 | Go check | `go vet ./...` |
 | Go test（CI 同款，含竞争检测） | `go test -race ./...` |
 | Go format | `gofmt -w .` |
+| 发版（**必须等 CI 绿再推 tag**） | 改三处版本号 → 推 `master` → 等 CI → `git push origin v<x.y.z>` |
 
 `pnpm dev` 已把 `/videos`、`/video`、`/refresh`、`/refresh-status`、`/auth`、`/login`
 代理到 `127.0.0.1:6010`（`cmd/webpreview` 的默认端口），因此**另起一个后端**即可获得
@@ -192,6 +193,19 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   漏掉 CHANGELOG 是这里最常见的漂移，`check-config-sync.mjs` 会红灯。
   打 tag 即触发 `.github/workflows/release.yml` 构建并创建 Release，
   已发布过的 tag 不要原地重打（附件与已下载的人会对不上）
+- **发版顺序：先推 `master`，等 CI 在那个 commit 上全绿，最后才推 tag**。
+  不要先推 tag 再等构建——tag 一旦推出去就**收不回来**了（见下条的 ruleset），
+  而 `release.yml` 里的静态检查、`-race`、`wails build` 都要在 tag 之后才跑；
+  中途失败就会留下一个"tag 已存在但 Release 没建出来"的半成品状态。
+  配套顺序：改三处版本号 → `pnpm check`（版本号一致断言）→ 提交推 `master` →
+  等 CI 绿 → `git tag -a v<x.y.z>` → `git push origin v<x.y.z>`。
+  推 tag 前可先自检三点：tag 名 = `v` + `wails.json` 的 `productVersion`
+  （`release.yml` 会硬校验）、该 tag 本地与远端都不存在、`HEAD` == `origin/master`
+- **仓库规则（GitHub rulesets，2026-10 加入，均对管理员生效、无 bypass）**：
+  「保护 master」拦删除 / 强推 / merge commit（要求线性历史）；
+  「保护已发布 tag」拦 `v*` 的删除与移动。**tag 的不可变是服务器强制的**，
+  不是文档约定——所以上条的顺序要求不是洁癖，是硬约束。
+  这两个规则都**不拦**创建 tag，也不拦正常推送，日常直推 `master` 不受影响。
 - **绝不能把大响应（视频）塞进 Wails 资产服务**：Wails v2 在 Windows 上把资产服务的
   响应体**全量缓冲进内存**后才交给 WebView2（`pkg/assetserver/webview/
   responsewriter_windows.go` 的 `body *bytes.Buffer` + `PutByteContent`），大视频会
