@@ -1,6 +1,6 @@
 module my-video-go
 
-go 1.27.1
+go 1.27.2
 
 require (
 	github.com/wailsapp/wails/v2 v2.16.0

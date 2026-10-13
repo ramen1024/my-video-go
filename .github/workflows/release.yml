@@ -27,8 +27,9 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           # 与 ci.yml 一致：必须钉死（理由见 ci.yml 的注释——staticcheck 读的
-          # 编译器导出数据格式随 Go 版本递增），且 wails build 用同一工具链
-          go-version: '1.27.1'
+          # 编译器导出数据格式随 Go 版本递增），且 wails build 用同一工具链；
+          # 三处（这里、ci.yml、go.mod 的 go 指令）必须同步改
+          go-version: '1.27.2'
           cache: true
 
       - name: 安装前端依赖
@@ -54,9 +55,10 @@ jobs:
       - name: go vet
         run: go vet ./...
 
-      # 与 ci.yml 相同的 staticcheck 门槛（发版前必须同样干净）
+      # 与 ci.yml 相同的 staticcheck 门槛（发版前必须同样干净），版本也一致：
+      # v0.8.2 起才支持 Go 1.27.2 的导出数据格式（v5）
       - name: staticcheck
-        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...
+        run: go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
 
       # 与 ci.yml 相同的测试门槛（发版前必须同样干净）：只跑 -race，它是普通
       # go test 的超集；windows-latest 自带 MinGW 供 CGO 使用

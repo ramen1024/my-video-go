@@ -245,22 +245,33 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   该文件，不放行会让 `pnpm install` 直接报 `ERR_PNPM_IGNORED_BUILDS`
 - Cargo→Go 的等价物速查：`cargo check`→`go vet ./...`；`cargo test`→`go test ./...`；
   `cargo fmt --check`→`gofmt -l .` 应无输出；`cargo clippy -D warnings`→**staticcheck**
-  （CI 已接入，`go run honnef.co/go/tools/cmd/staticcheck@v0.8.1 ./...`，钉版本以免
+  （CI 已接入，`go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...`，钉版本以免
   CI 升级工具后冒出全库新告警；升级版本是显式动作——本地清零告警后再改这个号）。
   `-race` 需要 gcc（CGO）：CI 的 windows-latest 自带 MinGW（无需安装步骤），
   CI 里已跑 `go test -race ./...`；本机 MinGW 已在 PATH 里，直接
   `go test -race ./...` 即可。
   注意 race 只能发现"被测试**真正并发执行到**"的路径（e6bc616 的教训：
   测试全绿≠没问题）——新增并发代码时必须同时补能并发触达它的测试。
-- **CI 的 Go 版本必须钉死，不能用 `stable`**（`setup-go` 的 `go-version: '1.27.1'`）。
-  教训：staticcheck 靠读取**编译器导出数据**工作，该格式随 Go 版本递增——
-  本机 1.27.1 产出 v4、staticcheck v0.8.1 支持到 v4，本地全绿；
-  而 CI 当时用 `stable`（更新的 Go）产出 v5，直接报
-  `export data version 5 is greater than maximum supported version 4`。
-  "本地能过"不代表 CI 能过，只要两边工具链版本不同。钉死 Go 还有一个理由：
-  `wails build` 用的是同一个工具链，钉死才能保证任何人、任何时间跑 CI 结果一致。
+- **Go 版本必须五处一致、不能用 `stable`**（`go-version: '1.27.2'`）。五处 =
+  `ci.yml` 的 `go-version`、`ci.yml` 的 staticcheck 版本号、`release.yml` 的
+  `go-version`、`release.yml` 的 staticcheck 版本号、`go.mod` 的 `go` 指令
+  （staticcheck 与 Go 是**配对**升级的，见下）。教训：staticcheck 靠读取**编译器导出
+  数据**工作，该格式随 Go 版本递增——1.27.1 产出 v4（staticcheck v0.8.1 支持到 v4）、
+  1.27.2 产出 v5（v0.8.1 直接报
+  `export data version 5 is greater than maximum supported version 4`，v0.8.2 起才支持）。
+  **这个坑踩过两次，两次的坏变量不同**：第一次（a7c9170）是 CI 用了 `stable`、
+  比本机新；第二次是本机从 1.27.1 升到 1.27.2 而仓库没跟着动。
+  所以"升级 Go"包含**本机升级**这一半——local 与 CI **任意一侧**漂移都会触发同一故障。
+  "本地能过"不代表 CI 能过，反之亦然，只要两边工具链版本不同。
+  钉死 Go 还有一个理由：`wails build` 用的是同一个工具链，钉死才能保证任何人、
+  任何时间跑 CI 结果一致。
   **升级 Go 的步骤**：先本地装新 Go → 升 staticcheck 到兼容版 → `./...` 清零告警 →
-  再同时改 `go-version` 与 staticcheck 版本号（两个文件都要改）。
+  再同时改上面列的五处。
+  **`go.mod` 的 `go` 指令不能漏、也不能单独改**：只钉 `setup-go` 是不够的——
+  `GOTOOLCHAIN=auto` 下若 `go.mod` 要求更高版本，Go 会**自动下载并切换工具链**，
+  照样越过 `setup-go` 的钉死（实测：PATH 上只有 1.27.1、`go.mod` 写 1.27.2 时，
+  `go version` 报 1.27.2）；而两边不一致时它又会直接硬报
+  `go.mod requires go >= 1.27.2 (running go 1.27.1)`。所以要改一起改。
 
 ## Windows-specific
 
