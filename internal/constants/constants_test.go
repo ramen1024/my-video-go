@@ -86,13 +86,16 @@ func TestLookupsDoNotExposeMutableMap(t *testing.T) {
 }
 
 // scripts/check-config-sync.mjs 会断言这些值与前端一致；此处锁住无符号类型
-// 与量级，防止有人手滑把 1 MiB 改成 1 MB 或把 5 MiB 改成 5 MB。
+// 与量级，防止有人手滑把 1 MiB 改成 1 MB 或把 1 MiB 日志阈值改成 1 MB。
 func TestSizeConstantsAreBinary(t *testing.T) {
 	if MinVideoFileSizeBytes != 1<<20 {
 		t.Errorf("MinVideoFileSizeBytes = %d, want %d", MinVideoFileSizeBytes, 1<<20)
 	}
-	if LogMaxFileSize != 5<<20 {
-		t.Errorf("LogMaxFileSize = %d, want %d", LogMaxFileSize, 5<<20)
+	// 日志只记事故，1 MiB 已足够覆盖任何一次排查；锁死是为了防止
+	// 有人"顺手"把它调回 5 MiB——那会让唯一可能写满文件的场景
+	// （启动就失败的循环重启）推迟 5 倍才轮转。
+	if LogMaxFileSize != 1<<20 {
+		t.Errorf("LogMaxFileSize = %d, want %d", LogMaxFileSize, 1<<20)
 	}
 }
 

@@ -1,6 +1,8 @@
 package logging
 
 import (
+	"errors"
+	"io"
 	"log/slog"
 	"my-video-go/internal/constants"
 	"os"
@@ -47,6 +49,73 @@ func blockedPath(t *testing.T, dir string) string {
 	return blocked
 }
 
+// brokenWriter 是"每次写都失败"的 sink，用来复刻 GUI 进程里无效的 os.Stdout。
+type brokenWriter struct {
+	// failFirst 为 true 时模拟 io.MultiWriter 的短路形态：一旦前面的 sink
+	// 报错，后面的 sink 根本收不到内容（这正是 H1 的真实成因）
+	writes int
+}
+
+func (b *brokenWriter) Write(p []byte) (int, error) {
+	b.writes++
+	return 0, errors.New("write /dev/stdout: The handle is invalid.")
+}
+
+// TestTeeWriterKeepsWritingAfterBrokenSink 是 H1 的回归护栏。
+//
+// 背景（真实缺陷）：日志 sink 曾是 `io.MultiWriter(os.Stdout, file)`。
+// `wails build` 产出的是 Windows **GUI 子系统**程序（PE Subsystem=2），
+// 进程没有控制台，`os.Stdout` 句柄无效、每次写都返回
+// `The handle is invalid.`。`io.MultiWriter` 在遇到第一个非 nil 错误时
+// **立即返回**，因此**文件永远拿不到一个字节**——日志文件恒为 0 字节，
+// 而 `showFatalError` 的弹窗还让用户去看那个文件。
+//
+// 这条路径在 `go test` 里看不出来：测试进程有控制台，stdout 写得好好的。
+// 所以必须用注入的坏 sink 复现，而不是依赖真实 stdout。
+func TestTeeWriterKeepsWritingAfterBrokenSink(t *testing.T) {
+	var file strings.Builder
+	broken := &brokenWriter{}
+
+	w := teeWriter{writers: []io.Writer{broken, &file}}
+	n, err := w.Write([]byte("critical-diagnostic\n"))
+	if err != nil {
+		t.Fatalf("部分 sink 失败不应整体报错: %v", err)
+	}
+	if n != len("critical-diagnostic\n") {
+		t.Fatalf("应报告成功写入的字节数，得到 %d", n)
+	}
+	if file.String() != "critical-diagnostic\n" {
+		t.Fatalf("前面的 sink 失败后，后面的文件仍必须收到内容，实际 %q", file.String())
+	}
+	if broken.writes != 1 {
+		t.Fatalf("坏 sink 也应被尝试一次，实际 %d", broken.writes)
+	}
+}
+
+// 对照：io.MultiWriter 在同一场景下会丢掉文件写入。
+// 保留这条是为了让上面那条测试的**理由**可执行地成立——将来若有人
+// "简化"回 io.MultiWriter，这里会直接说明为什么不行。
+func TestMultiWriterShortCircuitsOnBrokenSink(t *testing.T) {
+	var file strings.Builder
+	broken := &brokenWriter{}
+
+	_, err := io.MultiWriter(broken, &file).Write([]byte("lost\n"))
+	if err == nil {
+		t.Fatal("前置条件：io.MultiWriter 应返回错误")
+	}
+	if file.Len() != 0 {
+		t.Fatalf("前置条件：io.MultiWriter 应在坏 sink 处短路，文件不应收到内容，实际 %q", file.String())
+	}
+}
+
+// 所有 sink 都失败时才返回错误。
+func TestTeeWriterReturnsErrorWhenAllSinksFail(t *testing.T) {
+	w := teeWriter{writers: []io.Writer{&brokenWriter{}, &brokenWriter{}}}
+	if _, err := w.Write([]byte("x")); err == nil {
+		t.Fatal("所有 sink 都失败时应返回错误")
+	}
+}
+
 // 日志应写到首选路径
 func TestSetupWritesPreferredPath(t *testing.T) {
 	preserveDefaultLogger(t)
@@ -65,6 +134,36 @@ func TestSetupWritesPreferredPath(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "hello") {
 		t.Fatalf("日志内容缺失: %s", data)
+	}
+}
+
+// 端到端复刻 H1 的形态：即便控制台 sink 完全不可写，文件仍然要有内容。
+//
+// 与 TestTeeWriterKeepsWritingAfterBrokenSink 的区别：那条测的是 writer 本身，
+// 这条测的是 **Setup 装配出来的 sink**——退化成 io.MultiWriter 时它会红灯。
+func TestSetupFileSurvivesBrokenConsole(t *testing.T) {
+	preserveDefaultLogger(t)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "app.log")
+	file, err := newRotatingWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.close()
+
+	// 直接用坏 sink 组装，绕过真实 os.Stdout（测试进程里它是可用的）
+	slog.SetDefault(slog.New(slog.NewTextHandler(
+		teeWriter{writers: []io.Writer{&brokenWriter{}, file}}, nil)))
+	slog.Error("启动失败", "err", errors.New("WebView2 缺失"))
+	file.close()
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("日志应落盘: %v", err)
+	}
+	if !strings.Contains(string(data), "启动失败") {
+		t.Fatalf("控制台 sink 坏掉时文件仍应收到内容，实际 %q", data)
 	}
 }
 
@@ -119,7 +218,7 @@ func TestSetupFallbackStillRotates(t *testing.T) {
 		t.Fatalf("回退路径应为回退目录下的 rot.log，得到 %q", path)
 	}
 
-	// 写入超过轮转阈值（5 MiB）
+	// 写入超过轮转阈值
 	big := strings.Repeat("x", 1<<20)
 	for i := 0; i < 6; i++ {
 		slog.Info("fill", "data", big)
@@ -238,5 +337,17 @@ func TestWriteAfterFailedRotateDoesNotPanic(t *testing.T) {
 
 	if _, err := w.Write([]byte("boom")); err != nil {
 		t.Fatalf("写入不应报错: %v", err)
+	}
+}
+
+// newSink 只能确保"文件一定在里面"，控制台是否放行取决于运行环境。
+func TestNewSinkAlwaysIncludesFile(t *testing.T) {
+	var file strings.Builder
+	sink := newSink(&file)
+	if _, err := sink.Write([]byte("x")); err != nil {
+		t.Fatalf("写入不应报错: %v", err)
+	}
+	if file.String() != "x" {
+		t.Fatalf("文件 sink 必须收到内容，实际 %q", file.String())
 	}
 }
