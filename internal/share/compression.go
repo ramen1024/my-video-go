@@ -53,10 +53,16 @@ func withGzip(next http.Handler) http.Handler {
 // gzipEligiblePaths 是可压缩的端点（全部是 JSON 接口）。
 // 显式枚举而非按前缀推断：新增路由时必须在这里明确表态，
 // 避免不小心把视频流或二进制塞进压缩路径。
+//
+// **准入标准是"响应体足够大、且会被反复拉取"**，不是"它是 JSON"：
+// 本中间件唯一的收益场景是列表轮询（2000 条 370KB → 6.4KB，每 30 秒一次 × 每客户端）。
+//
+// `/auth` **有意不在列**：它的响应是 `{"success":true,"token":"<64 hex>"}`，
+// 实测明文 91 字节 → gzip 116 字节（**净增 25 字节**），而每次登录只发生一次；
+// 压缩它既费 CPU 又让响应变大。别因为"它也是 JSON 接口"就加回来。
 var gzipEligiblePaths = map[string]bool{
 	"/videos":         true,
 	"/refresh-status": true,
-	"/auth":           true,
 }
 
 // isGzipEligiblePath 判断路径是否走压缩。
@@ -76,6 +82,18 @@ type gzipResponseWriter struct {
 	wroteHeader bool
 	closed      bool
 }
+
+// Unwrap 暴露被包装的 ResponseWriter，让 http.ResponseController 能穿透本类型
+// 拿到真正的连接。
+//
+// **必须有**：内嵌 `http.ResponseWriter`（接口）**不会**把底层类型的方法提升上来——
+// ResponseController 只认 `interface{ SetReadDeadline(time.Time) error }` 或
+// `Unwrap() ResponseWriter` 二者之一，于是缺了本方法时
+// `NewResponseController(w).SetReadDeadline(...)` 在有 gzip 的路径上一律返回
+// "feature not supported"，调用方的超时被**静默**跳过（/auth 的请求体读超时
+// 就是这样失效的：带 Accept-Encoding: gzip 的客户端能让 `io.ReadAll` 无限阻塞）。
+// 这类失败不会报错、只会退化成"没有超时"，因此由 TestGzipWriterExposesUnwrap 锁定。
+func (w *gzipResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 // statusBodyless 是协议上不允许有正文的状态码。
 //

@@ -66,22 +66,22 @@ func TestLegacyExtensionsStayListed(t *testing.T) {
 	}
 }
 
-// VideoTypes 返回副本：调用方（一致性脚本、测试）改它不能污染包内映射。
-func TestVideoTypesReturnsCopy(t *testing.T) {
-	got := VideoTypes()
-	if len(got) != len(videoTypes) {
-		t.Fatalf("副本长度 %d，want %d", len(got), len(videoTypes))
-	}
-	got["mp4"] = "mutated"
-	got["injected"] = "video/fake"
-	if VideoContentType("mp4") != "video/mp4" {
-		t.Error("修改副本影响了包内映射")
+// 清单是包内唯一的 map：任何"返回副本"的访问器都只是给包外多开一个口子，
+// 而真正的消费方（scanner / video / 一致性脚本）要么查表函数、要么直接读源码文本。
+// 这里确认查表函数不会意外建立"可写视图"——包外拿到的只能是值。
+func TestLookupsDoNotExposeMutableMap(t *testing.T) {
+	// IsSupportedVideoExtension / VideoContentType 只返回值，改不动包内状态
+	if !IsSupportedVideoExtension("mp4") || VideoContentType("mp4") != "video/mp4" {
+		t.Fatal("前置条件：mp4 应在清单内且映射到 video/mp4")
 	}
 	if IsSupportedVideoExtension("injected") {
-		t.Error("新增副本键渗入了包内映射")
+		t.Error("未知扩展名不应命中")
 	}
-	if _, ok := VideoTypes()["injected"]; ok {
-		t.Error("第二次调用返回了被污染的映射")
+	// 清单键与取值自洽（遍历包内映射本身）
+	for ext, ct := range videoTypes {
+		if VideoContentType(ext) != ct {
+			t.Errorf("VideoContentType(%q) = %q, want %q", ext, VideoContentType(ext), ct)
+		}
 	}
 }
 

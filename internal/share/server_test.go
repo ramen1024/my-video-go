@@ -642,40 +642,54 @@ func TestStaticAssetsCaching(t *testing.T) {
 // /auth 免鉴权、局域网任意设备可达，而 ReadHeaderTimeout 只管请求头。
 // 发完头就不发体的客户端必须被 AuthBodyReadTimeout 掐断，否则每个连接
 // 都能白占一个 goroutine + 一个 socket。
+//
+// **必须同时覆盖带 Accept-Encoding: gzip 的请求**：/auth 要经过 withGzip，
+// 而 gzipResponseWriter 早先没有实现 Unwrap，ResponseController 取不到底层连接，
+// SetReadDeadline 静默返回 "feature not supported"——于是恰好是**每个真实浏览器**
+// （都会发 Accept-Encoding）发出的请求不受超时保护，而这条不带该头的测试照样通过。
 func TestAuthStalledBodyIsTimedOut(t *testing.T) {
-	s, _ := newTestServer(t, true)
-	srv := httptest.NewServer(s.Handler())
-	defer srv.Close()
+	for _, ae := range []string{"", "gzip"} {
+		t.Run("Accept-Encoding="+ae, func(t *testing.T) {
+			s, _ := newTestServer(t, true)
+			srv := httptest.NewServer(s.Handler())
+			defer srv.Close()
 
-	// 手工发头、声明 Content-Length 但不发体，模拟"吊住"的客户端
-	conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
+			// 手工发头、声明 Content-Length 但不发体，模拟"吊住"的客户端
+			conn, err := net.Dial("tcp", strings.TrimPrefix(srv.URL, "http://"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
 
-	if _, err := fmt.Fprintf(conn, "POST /auth HTTP/1.1\r\n"+
-		"Host: 127.0.0.1\r\n"+
-		"Content-Type: application/json\r\n"+
-		"Content-Length: 100\r\n\r\n"); err != nil {
-		t.Fatal(err)
-	}
+			hdr := "POST /auth HTTP/1.1\r\n" +
+				"Host: 127.0.0.1\r\n" +
+				"Content-Type: application/json\r\n" +
+				"Content-Length: 100\r\n"
+			if ae != "" {
+				hdr += "Accept-Encoding: " + ae + "\r\n"
+			}
+			hdr += "\r\n"
+			if _, err := fmt.Fprint(conn, hdr); err != nil {
+				t.Fatal(err)
+			}
 
-	// 服务端应在超时后回应，而不是永久挂住
-	if err := conn.SetReadDeadline(time.Now().Add(constants.AuthBodyReadTimeout + 5*time.Second)); err != nil {
-		t.Fatal(err)
-	}
-	buf := make([]byte, 256)
-	n, err := conn.Read(buf)
-	if err != nil {
-		t.Fatalf("应在读超时后收到响应，实际读取失败: %v", err)
-	}
-	resp := string(buf[:n])
-	if !strings.Contains(resp, "HTTP/1.1") {
-		t.Fatalf("响应不像 HTTP: %q", resp)
-	}
-	if strings.Contains(resp, "200 OK") {
-		t.Fatalf("吊住的请求不该认证成功: %q", resp)
+			// 服务端应在超时后回应，而不是永久挂住
+			if err := conn.SetReadDeadline(time.Now().Add(constants.AuthBodyReadTimeout + 5*time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			buf := make([]byte, 256)
+			n, err := conn.Read(buf)
+			if err != nil {
+				t.Fatalf("应在读超时后收到响应（Accept-Encoding=%q），实际读取失败: %v", ae, err)
+			}
+			resp := string(buf[:n])
+			if !strings.Contains(resp, "HTTP/1.1") {
+				t.Fatalf("响应不像 HTTP: %q", resp)
+			}
+			if strings.Contains(resp, "200 OK") {
+				t.Fatalf("吊住的请求不该认证成功: %q", resp)
+			}
+		})
 	}
 }
 

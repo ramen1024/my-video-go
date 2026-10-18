@@ -64,6 +64,9 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 0x0f, G: 0x17, B: 0x2a, A: 255}, // theme.css 的 --bg，防首帧闪白
 		AssetServer: &assetserver.Options{
 			Assets: assets,
+			// 桌面端 CSP：Wails v2 没有 CSP 配置项，只能靠中间件注入。
+			// 见 desktop_csp.go 的说明（含 media-src 必须放行回环地址的原因）。
+			Middleware: desktopCSPMiddleware,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,

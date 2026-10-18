@@ -338,7 +338,12 @@ func (m *Manager) cleanupFailedLocked() {
 	}
 }
 
-// CleanupOnce 主动清理一次过期 session 与失败记录（/auth 请求入口会顺带调用）。
+// CleanupOnce 主动清理一次过期 session 与失败记录。
+//
+// 唯一的生产调用者是 cleanupLoop（每 SessionCleanupIntervalSecs 一次）。
+// **/auth 入口刻意不调用它**：该端点免鉴权、局域网内任何设备都能反复打，
+// 而它要抢 m.mu（再叠 sessMu）并遍历两张表；Authenticate 内部已经会清理
+// 失败记录，session 则由后台循环负责（见 internal/share/auth.go 的说明）。
 func (m *Manager) CleanupOnce() {
 	m.mu.Lock()
 	m.cleanupFailedLocked()

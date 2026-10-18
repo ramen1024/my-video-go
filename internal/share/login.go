@@ -47,7 +47,7 @@ func (s *Server) serveIndexHTML(w http.ResponseWriter, r *http.Request) {
 		writeText(w, http.StatusServiceUnavailable, "前端资源不可用：请先执行 pnpm build 构建前端产物")
 		return
 	}
-	w.Header().Set("Content-Security-Policy", browserCSP)
+	w.Header().Set("Content-Security-Policy", BrowserCSP)
 	w.Header().Set("Cache-Control", "no-store")
 	writeHTML(w, http.StatusOK, string(data))
 }

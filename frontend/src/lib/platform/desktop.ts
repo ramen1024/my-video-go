@@ -74,6 +74,7 @@ export const desktop: Platform = {
   canCancelScan: true,
   canOpenWithSystemPlayer: true,
   listPollIntervalMs: null,
+  scanRunsLocally: true,
 
   async init() {
     // 幂等：端口在应用生命周期内不变，取一次即可

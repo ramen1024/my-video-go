@@ -144,9 +144,13 @@ Session Cookie 属性：`HttpOnly; SameSite=Strict; Path=/`，有效期与服务
 服务器返回 `304 Not Modified`（响应体为空，同样带 `ETag`）。网页端即依赖这一机制
 避免重复传输与重渲染。
 
-**压缩：** 客户端带 `Accept-Encoding: gzip` 时，`/videos`、`/refresh-status`、`/auth`
-三个 JSON 接口会返回 `Content-Encoding: gzip`；`q=0` 表示显式拒绝，此时返回明文。
+**压缩：** 客户端带 `Accept-Encoding: gzip` 时，`/videos`、`/refresh-status`
+两个 JSON 接口会返回 `Content-Encoding: gzip`；`q=0` 表示显式拒绝，此时返回明文。
 `304` 响应不压缩且不带 `Content-Encoding`。
+
+`/auth` **有意不压缩**：它的响应只有约 91 字节（`{"success":true,"token":"…"}`），
+gzip 后反而增大到约 116 字节，且每次登录只请求一次——压缩它没有收益。
+（`/auth` 的请求体读超时与压缩中间件无关，它由 `AuthBodyReadTimeout` 保证。）
 
 以上所有情况都会带 `Vary: Accept-Encoding`——**包括未压缩的那次响应**：同一个 `ETag`
 对应两种字节表示，只要有一侧缺 `Vary`，中间缓存就可能把压缩体喂给不支持压缩的
@@ -154,7 +158,7 @@ Session Cookie 属性：`HttpOnly; SameSite=Strict; Path=/`，有效期与服务
 因为它们的表示不随编码变化。
 
 **不压缩的端点：** `/video/*`（视频已是压缩格式，且 Range 与 `Content-Length`
-语义不能被压缩层破坏）、静态资源、登录页。
+语义不能被压缩层破坏）、静态资源、登录页、`/auth`（响应过小，见上）。
 
 ### `POST /refresh`
 

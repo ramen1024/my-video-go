@@ -4,6 +4,8 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 手机浏览器地址栏的配色：与 --bg 一致，避免顶部一条突兀的亮色 -->
+    <meta name="theme-color" content="#0f172a" />
     <title>视频扫描器</title>
     <!--
       预涂底色：防止 theme.css 加载完成前首帧闪白。
@@ -14,10 +16,16 @@
       登录页注入的是同一份，两处各写一套必然漂移。
     -->
     <style>
+      html,
       body {
         margin: 0;
         background: #0f172a;
         color: #fff;
+        /* 高度锁在**实际可视高度**上（dvh 而非 vh）：手机上地址栏收起会改变
+           可视高度，用 vh 会算大，而下面的 overflow: hidden 让超出的部分
+           没有任何滚动条能滚到。vh 那行留给不支持 dvh 的老内核。 */
+        height: 100vh;
+        height: 100dvh;
         overflow: hidden;
       }
     </style>

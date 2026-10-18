@@ -20,6 +20,15 @@
     canPickFolder: boolean;
     /** 是否提供局域网共享控制（网页端自身就是被共享方） */
     canShare: boolean;
+    /**
+     * 扫描是否发生在当前设备上（桌面端 true / 网页端 false）
+     *
+     * 只影响这个按钮的**文案**：网页端的"刷新"实际是在**共享方那台电脑**上
+     * 重新扫盘，写成"刷新"会被理解成"刷新我这个页面"，于是用户以为点错了、
+     * 连点几次、把电脑拖在几十秒的持续读盘里。二次确认在 `App.svelte`
+     * 的 `requestScan` 里（确认框要盖在整页之上，不适合放在 header 内部）。
+     */
+    scanRunsLocally: boolean;
   }
 
   let {
@@ -35,6 +44,7 @@
     isPicking,
     canPickFolder,
     canShare,
+    scanRunsLocally,
   }: Props = $props();
 </script>
 
@@ -70,9 +80,21 @@
       </button>
     {/if}
     {#if !canPickFolder || currentFolder}
-      <button class="btn btn-secondary" onclick={onScan} disabled={isScanning}>
+      <!--
+        文案按平台分叉：桌面端扫的是本机（"重新扫描"名副其实）；
+        网页端扫的是**共享方那台电脑**，写成"重新扫描"至少还算诚实，
+        但必须配 title 说清代价——真正的解释与二次确认在 App.svelte。
+      -->
+      <button
+        class="btn btn-secondary"
+        onclick={onScan}
+        disabled={isScanning}
+        title={scanRunsLocally
+          ? "重新扫描当前文件夹"
+          : "让共享这台电脑的一方重新扫描视频目录（会占用那台电脑的磁盘）"}
+      >
         <svg class:spinning={isScanning} xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path></svg>
-        刷新
+        {scanRunsLocally ? "重新扫描" : "重新扫描电脑"}
       </button>
     {/if}
     {#if canShare}

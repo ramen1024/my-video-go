@@ -199,6 +199,9 @@ export const web: Platform = {
   canCancelScan: false,
   canOpenWithSystemPlayer: false,
   listPollIntervalMs: 30_000,
+  // 扫描跑在共享方那台电脑上——本文件唯一"操作别人设备"的能力，
+  // 调用方必须据此换文案并加二次确认（见 App.svelte 的 requestScan）
+  scanRunsLocally: false,
 
   async pickFolder() {
     // 网页端无法访问客户端文件系统；由 canPickFolder 保证 UI 不会提供该入口
