@@ -234,8 +234,48 @@ if (!/constants\.IPCacheTTLSecs/.test(cacheTTLDecl[1])) {
   );
 }
 
-// ---------- 3c. 预涂底色：theme.css / index.html，两处必须一致 ----------
+// ---------- 3d. `.content` 的滚动高度链不能断 ----------
 
+// `.content` 是 `.app`（column flex）的子项，同时是整页唯一的滚动区域宿主。
+// 想让它既能裁剪溢出、又不会因为溢出被"滚动到可见位置"（搜索框曾把整列文件名
+// 顶出左边），用的是 `overflow: clip` —— 但 **clip 不是滚动容器**，于是
+// Flexbox 规范里那条"滚动容器自动 min-height:0"的例外不再适用，flex item 退回
+// min-height:auto（不肯收缩到内容以下）。结果：40 条视频把 .content 撑到 2022px
+// （视口 800px），内层 .table-body-container 拿到和内容一样的高度，
+// scrollHeight === clientHeight —— **整个列表彻底无法滚动**，超出的部分被 clip
+// 裁掉且没有滚动条能到达。这个回归真实发生过一次。
+//
+// 所以：`overflow: clip` 与 `min-height: 0` 必须同时出现在 .content 规则里。
+// 复用上面（3a 区块）已经读入的 appSvelte，避免重复声明
+const contentRule = appSvelte.match(/\.content\s*\{([^}]*)\}/);
+if (!contentRule) fail("frontend/src/App.svelte 中找不到 .content 规则");
+
+// ⚠️ 必须先剥掉注释再判断：上面的讲解性注释里**本身就写着** `min-height: 0`
+// 和 `overflow: clip`，不剥注释的话删掉真实声明也照样通过
+// （AGENTS.md 里 format.ts 的 canPlayType 检查踩过同一个坑，这是第二次）。
+const contentBody = contentRule[1]
+  .replace(/\/\*[\s\S]*?\*\//g, "") // 块注释
+  .replace(/(^|[^:])\/\/.*$/gm, "$1"); // 行注释（避开 https:// 这类）
+
+const hasClip = /overflow:\s*clip/.test(contentBody);
+const hasMinHeightZero = /min-height:\s*0\b/.test(contentBody);
+
+if (hasClip && !hasMinHeightZero) {
+  fail(
+    ".content 使用 overflow: clip 时**必须**同时声明 min-height: 0。\n" +
+      "  clip 不是滚动容器，flex item 会退回 min-height:auto（不肯收缩到内容高度以下），" +
+      "整个视频列表将无法滚动（历史回归：40 条视频把 .content 撑到 2022px、" +
+      "scrollHeight === clientHeight，列表彻底滚不动）。",
+  );
+}
+if (!hasMinHeightZero) {
+  fail(
+    ".content 缺少 min-height: 0：它是 column flex 的子项，不置 0 就会被内容撑高，" +
+      "内层滚动容器拿不到可用高度，列表无法滚动。",
+  );
+}
+
+// ---------- 3c. 预涂底色：theme.css / index.html，两处必须一致 ----------
 // 首帧防闪屏的内联样式与 meta theme-color 只能硬编码颜色（CSS 变量那时还没生效），
 // 因此底色在 theme.css 之外还有两份字面量。三者漂移的症状是**启动瞬间闪一下**
 // 旧底色，或者在手机上地址栏出现一条与原背景不同的色带——都很轻微，没人会

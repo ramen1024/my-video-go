@@ -529,11 +529,25 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    /* clip 而非 hidden：hidden 仍然**创建滚动容器**，于是任何一点横向溢出
-       都会被脚本/浏览器"滚动到可见位置"，而这里是整页布局，滚过去就再也
-       回不来（搜索框曾因此把整列文件名顶出左边，见 theme.css 的 box-sizing 说明）。
-       clip 只裁剪、不产生滚动区，从根上杜绝这类跳位。
-       overflow-clip-margin 给圆角留一点余量，避免子元素的滚动条被切到圆角外。 */
+    /**
+     * ⚠️ 这两条必须成对出现，缺一个就会出大事。
+     *
+     * `min-height: 0`：`.content` 是 `.app`（column flex）的子项，flex item 的
+     * `min-height` 默认是 `auto`，也就是**不肯收缩到内容高度以下**。Flexbox 规范
+     * 里唯一会自动把它按 0 算的例外是"该 item 自身是滚动容器"——`overflow: hidden`
+     * 满足这个条件，`clip` **不满足**。所以只写 clip 时，40 条视频就会把 `.content`
+     * 撑到 2022px（而视口只有 800px），内层 `.table-body-container` 随之拿到和内容
+     * 一样的高度，`scrollHeight === clientHeight` —— **整个列表无法滚动**，
+     * 超出的部分直接被 `clip` 裁掉且没有任何滚动条能到达。实测踩过。
+     *
+     * `overflow: clip`：只裁剪、不产生滚动容器。用 `hidden` 的话 `.content`
+     * 自己成为滚动容器，任何一点横向溢出都会被浏览器"滚动到可见位置"，
+     * 而这是整页布局，滚过去就再也回不来（搜索框曾因此把整列文件名顶出左边，
+     * 见 theme.css 的 box-sizing 说明）。
+     *
+     * 结论：**clip 负责不跳位，min-height: 0 负责还能滚动**，二者缺一不可。
+     */
+    min-height: 0;
     overflow: clip;
     display: flex;
     flex-direction: column;
