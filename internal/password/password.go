@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"my-video-go/internal/apperr"
 	"my-video-go/internal/constants"
 	"my-video-go/internal/models"
@@ -112,14 +113,18 @@ func (m *Manager) loadConfig() {
 	data, err := os.ReadFile(m.configPath())
 	if err != nil {
 		if !os.IsNotExist(err) {
-			fmt.Println("读取密码配置失败，使用默认设置:", err)
+			// 走 slog 而不是 fmt.Print*：本应用是 GUI 程序，进程没有控制台，
+			// fmt 的输出会落到无效句柄上直接消失（既没有时间戳也不进轮转文件）。
+			slog.Warn("读取密码配置失败，使用默认设置", "err", err)
 		}
 		return
 	}
 	var cfg config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		// 配置损坏时静默重置（与原版一致）：相当于清除密码并禁用保护
-		fmt.Println("密码配置解析失败（文件可能损坏），已重置:", err)
+		// 配置损坏时静默重置（与原版一致）：相当于清除密码并禁用保护。
+		// 但这**是安全事件**，必须留下记录——否则"密码保护为什么没了"
+		// 将完全无从追查。级别用 Warn 而非 Error：应用本身仍可正常使用。
+		slog.Warn("密码配置损坏，已重置为默认（密码被清除、保护被禁用）", "err", err)
 		return
 	}
 	if cfg.PasswordHash != nil {
@@ -145,13 +150,15 @@ func (m *Manager) saveConfigLocked() {
 	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
-		fmt.Println("密码配置序列化失败:", err)
+		slog.Error("密码配置序列化失败", "err", err)
 		return
 	}
 	// 必须原子替换：loadConfig 对损坏文件静默重置（= 静默禁用密码保护），
 	// 直接 WriteFile 在进程崩溃/断电时可能留下截断的 JSON 恰好触发该路径
 	if err := writeFileAtomic(m.configPath(), data); err != nil {
-		fmt.Println("密码配置保存失败:", err)
+		// 保存失败意味着下一次启动会丢掉这次设置（含"刚启用的密码保护"），
+		// 用户会表现为"明明设了密码，重启后又不设防"——必须留痕。
+		slog.Error("密码配置保存失败", "err", err)
 	}
 }
 

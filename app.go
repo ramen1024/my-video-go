@@ -54,11 +54,12 @@ func (a *App) shutdown(ctx context.Context) {
 
 // ScanVideos 扫描文件夹并写入全局状态，返回扫描报告（列表经 GetSharedVideos 获取）。
 func (a *App) ScanVideos(folderPath string) (models.ScanReport, error) {
+	// 成功路径**不写日志**：扫描完成是正常操作，本应用是个人工具，
+	// 每次扫描都记一条 Info 只会把真正有用的事故记录埋掉（见 logging 包注释）。
 	report, err := scanner.ScanAndStore(a.st, folderPath, a.st.CancelFlag())
 	if err != nil {
 		return models.ScanReport{}, err
 	}
-	slog.Info("扫描完成", "total", report.Total, "skipped", report.SkippedSmallCount, "folder", folderPath)
 	return *report, nil
 }
 
@@ -137,8 +138,6 @@ func (a *App) StartShareServer(folderPath string, port int) (models.ShareServerI
 	if port == 0 {
 		port = constants.DefaultSharePort
 	}
-	slog.Info("开始启动共享", "folder", folderPath, "port", port)
-
 	if err := a.st.StartServerStarting(); err != nil {
 		return models.ShareServerInfo{}, err
 	}
@@ -152,7 +151,6 @@ func (a *App) StartShareServer(folderPath string, port int) (models.ShareServerI
 		return models.ShareServerInfo{}, apperr.Other("%v", err)
 	}
 	a.st.SetServerRunningWithInfo(info)
-	slog.Info("共享服务器已启动", "ips", info.IPs, "port", info.Port)
 	return *info, nil
 }
 
@@ -169,7 +167,6 @@ func (a *App) StopShareServer() error {
 		return apperr.Other("等待服务器线程退出失败: %v", err)
 	}
 	a.st.SetServerStopped()
-	slog.Info("共享服务器已停止")
 	return nil
 }
 

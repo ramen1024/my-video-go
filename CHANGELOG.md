@@ -6,6 +6,31 @@
 
 ### 修复
 
+- **日志文件恒为 0 字节，而启动失败的弹窗还在让用户去看它**：日志 sink 是
+  `io.MultiWriter(os.Stdout, file)`，而 `wails build` 产出的是 Windows **GUI
+  子系统**程序（实测 PE `Subsystem=2`），进程没有控制台，`os.Stdout` 句柄无效、
+  每次写都返回 `The handle is invalid.`；`io.MultiWriter` 遇到第一个非 nil 错误
+  就**短路**，于是**文件永远拿不到一个字节**。本机 `%AppData%\video-scanner-go\
+  video-scanner.log` 实测为 0 字节（而 `password_config.json` 有内容），
+  `showFatalError` 弹窗给出的日志路径点开是空的——正是该函数想避免的
+  "双击没反应且无从排查"。现改用 `teeWriter`（逐 sink 写、部分失败不影响其余）
+  并只在 `os.Stdout` 句柄有效时才挂控制台。`go test` 里看不出来（测试进程有
+  控制台），因此新增 `TestTeeWriterKeepsWritingAfterBrokenSink` 与对照的
+  `TestMultiWriterShortCircuitsOnBrokenSink`。用真实 GUI 子程序实测：
+  修复前 `size=0` → 修复后 `size=306`，两条事故日志均落盘
+- **`password.go` 的 4 处 `fmt.Println` 在 GUI 进程里同样进黑洞**：配置损坏
+  （= 静默清除密码并禁用保护，这是**安全事件**）与保存失败（= 重启后密码保护
+  悄悄失效）都只输出到无效的 stdout，既没有时间戳也不进轮转文件。现全部改为
+  `slog`：损坏重置用 `Warn`、保存/序列化失败用 `Error`
+
+### 变更
+
+- **日志收窄为"事故记录"而不是行为审计**：删掉 `ScanVideos` 与共享启停的 4 条
+  正常路径 `Info`（扫描完成、开始启动共享、共享服务器已启动/已停止）。
+  本应用是个人工具，那类日志只会把真正有用的几行埋掉；现在只剩启动失败、
+  服务器异常退出、密码配置问题、退出清理失败等事件。轮转阈值随之从 5 MiB
+  降到 1 MiB（正常使用一年也写不满，调小只是让"文件多大"不再是个需要担心的事）
+
 - **点一下搜索框，整列文件名被永久裁掉**（布局缺陷）：SPA 的 `theme.css`
   缺少全局 `box-sizing: border-box`（登录页有、SPA 没有，两端因此表现不同）。
   `.search-box input { width: 100%; padding: 0 12px 0 30px }` 里那 100% 是**内容宽**，

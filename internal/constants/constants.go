@@ -65,8 +65,13 @@ const (
 	// HTTPIdleTimeout 是 keep-alive 连接的空闲超时（share 与回环播放服务器共用）。
 	HTTPIdleTimeout = 120 * time.Second
 
-	// LogMaxFileSize 是日志文件轮转阈值（5 MiB，轮转为 .1 只保留一份）。
-	LogMaxFileSize int64 = 5 << 20
+	// LogMaxFileSize 是日志文件轮转阈值（1 MiB，轮转为 .1 只保留一份）。
+	//
+	// 从 5 MiB 降到 1 MiB：日志只记录事故（见 internal/logging 包注释），
+	// 正常使用一年也写不满一个阈值，因此"保留多少历史"不是问题，
+	// "文件多大才不会被忽略"才是——1 MiB 约对应数万行事故记录，
+	// 足够覆盖任何一次需要翻日志的排查。
+	LogMaxFileSize int64 = 1 << 20
 )
 
 // videoTypes 是允许扫描/播放的视频扩展名（必须小写）到 Content-Type 的映射。

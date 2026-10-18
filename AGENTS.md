@@ -101,7 +101,18 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - `localips/` — 本机全局 IPv4 枚举（5 分钟缓存，过滤回环/链路本地）。缓存 TTL 直接用
   `constants.IPCacheTTLSecs`，**不要**另立 `cacheTTL`（旧注释称"避免循环依赖"并不成立：
   `constants` 只 import `time`）。`check-config-sync.mjs` 会断言这一点
-- `logging/` — slog 双写（控制台 + 数据目录文件，5 MiB 轮转为 `.log.1`）
+- `logging/` — slog 输出（数据目录文件 + **句柄有效时**的控制台）。定位是
+  **事故记录**而不是行为审计：正常路径（扫描完成、共享启停）**不写日志**，
+  只有启动失败、服务器异常退出、密码配置被重置/保存失败这类事件才记。
+  **必须用 `teeWriter` 而不是 `io.MultiWriter`**：`wails build` 产出的是
+  Windows GUI 子系统程序（PE Subsystem=2），进程没有控制台，`os.Stdout`
+  句柄无效、每次写都返回 `The handle is invalid.`，而 `io.MultiWriter` 遇到
+  第一个错误就**短路**，会让**日志文件永远拿不到一个字节**（实测 log 恒为
+  0 字节，而 `showFatalError` 弹窗却让用户去看它）。`go test` 里看不出来——
+  测试进程有控制台。由 `TestTeeWriterKeepsWritingAfterBrokenSink` 与
+  `TestMultiWriterShortCircuitsOnBrokenSink`（对照）锁死。
+  `password.go` 里**不要**用 `fmt.Print*`：GUI 进程里它同样进黑洞，
+  且没有时间戳、不进轮转文件
 
 **新增一个绑定方法的步骤：**
 1. 在 `app.go` 加导出方法（错误用 `apperr`，`Error()` 文案即前端看到的内容）
