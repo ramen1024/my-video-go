@@ -130,18 +130,32 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   （两者提交于同一次提交，名字与内容一致）
 - **`internal/share/theme.css` 是 `frontend/src/lib/styles/theme.css` 的副本**（go:embed
   无法引用模块外文件）：`TestLoginTemplateInvariants` 逐字节比对两者，不一致即红灯；
-  改前端主题后必须重新拷贝。该文件除令牌外还带两条全局规则（`body` 的字体栈与
-  基准字号、全站 `:focus-visible` 焦点环），登录页注入的是同一份——它的 `body`
-  规则在注入内容**之后**，所以只继承字号/字体栈，排版仍由自己控制
+  改前端主题后必须重新拷贝。该文件除令牌外还带三条全局规则（`box-sizing` 基线、
+  `body` 的字体栈与基准字号、全站 `:focus-visible` 焦点环），登录页注入的是同一份——
+  它的 `body` 规则在注入内容**之后**，所以只继承字号/字体栈，排版仍由自己控制
+- **`theme.css` 里的 `*, *::before, *::after { box-sizing: border-box }` 不能删**：
+  登录页一直有它、SPA 曾经没有，于是 `.search-box input { width:100%; padding:0 12px 0 30px }`
+  的 100% 在 SPA 里是**内容宽**，实际外框比父容器宽 43.6px；工具栏溢出 27.6px 让
+  `.content`（当时 `overflow:hidden`，但它仍是滚动容器）产生横向滚动区，输入框一聚焦
+  浏览器就把它滚进可视区，`scrollLeft` 卡在 28px —— 整列文件名**永久**被裁掉，
+  只能刷新恢复。删掉这条没有任何编译错误，症状只在用户点一下搜索框之后出现，
+  因此由 `TestThemeHasBorderBoxBaseline` 锁死（已验证移除后即红灯）。
+  同理 `.content` 用 `overflow: clip` 而非 `hidden`：后者只裁剪却仍可滚动
+- **`--bg` 的值有三处副本**：`theme.css` 的 `--bg`、`frontend/index.html` 的
+  `theme-color` 与首帧预涂底色、`main.go` 的 `BackgroundColour`（窗口在 HTML 到达前
+  就显示了）。三者漂移的症状是"启动瞬间闪一下旧底色"，没人会为它开 issue。
+  现由 `check-config-sync.mjs` 断言三处相等——改主题时**一起改**
+- `internal/share/login.html` 有两条不变量测试：必须含裸 `<script>` 标签（nonce 注入
+  依赖字符串替换）、不得出现 `#rgb` / `rgb(` / `rgba(` 硬编码颜色（颜色一律来自注入的
+  theme 令牌）。另有一条 `TestLoginTemplateAllowsZoom` 禁止 `user-scalable=no` /
+  `maximum-scale=1`——**它必须匹配 viewport 那一行**，不能全文搜索：模板里解释
+  "为什么不要这么做"的注释本身就含该字符串（与 format.ts 的 canPlayType 检查同一个坑）
 - **`:global()` 绝不能出现在 `frontend/src/lib/styles/*.css` 里**：那些是普通 CSS，
   由组件的 `import "$lib/styles/buttons.css"` 作为副作用模块引入，Svelte 编译器
   **不处理**它们，`:global(...)` 会原样进入产物，而它不是合法 CSS 选择器 →
   浏览器把整条规则丢掉，样式静默失效（`.dismiss-btn` 就这样坏过一段时间，
   提示条上的关闭按钮渲染成系统默认按钮）。全局规则直接写普通选择器；
   产物里可以用 `grep -o ":global[^{]*{" dist/assets/*.css` 复核（应为空）
-- `internal/share/login.html` 有两条不变量测试：必须含裸 `<script>` 标签（nonce 注入
-  依赖字符串替换）、不得出现 `#rgb` / `rgb(` / `rgba(` 硬编码颜色（颜色一律来自注入的
-  theme 令牌）
 - 浏览器端 CSP（`internal/share/response.go` 的 `BrowserCSP`）依赖**"Vite 产物没有内联
   script"**这一前提，所以是 `script-src 'self'` 而无需 nonce；`scripts/check-web-build.mjs`
   会断言产物无内联脚本。若升级构建工具后产物出现内联脚本，白屏会在运行时才暴露——
