@@ -16,6 +16,7 @@
   import VideoTable from "$lib/components/VideoTable.svelte";
   import SharePanel from "$lib/components/SharePanel.svelte";
   import PasswordPanel from "$lib/components/PasswordPanel.svelte";
+  import ConfirmDialog from "$lib/components/ConfirmDialog.svelte";
   import "$lib/styles/theme.css";
   import "$lib/styles/buttons.css";
 
@@ -52,6 +53,13 @@
   let pollTimer: ReturnType<typeof setInterval> | null = null;
   /** 原生目录对话框正在打开：防止连点开出两个对话框、起两次扫描 */
   let isPicking = $state(false);
+  /**
+   * 是否正在等待"让电脑重新扫描"的二次确认（仅网页端）
+   *
+   * 网页端点这个按钮的代价落在**共享方那台电脑**上（满速读盘几十秒），
+   * 而手机上很容易误触，因此先问一次再动手。桌面端不经过这个状态。
+   */
+  let isConfirmingScan = $state(false);
 
   async function selectFolder() {
     // 原生目录对话框是模态的但调用可重入：连点两次会开出两个对话框，
@@ -74,8 +82,33 @@
     }
   }
 
+  /**
+   * 扫描按钮的入口：桌面端直接扫，网页端先确认
+   *
+   * 两侧的代价完全不同，因此**不能**共用一条路径：
+   * 桌面端扫的是本机磁盘，点一下就是用户自己的选择，加确认框只是碍事；
+   * 网页端的扫描跑在共享方那台电脑上（大目录是几十秒的持续 IO），
+   * 而按钮在手机上极易误触——先问一次再动手。
+   */
+  function requestScan() {
+    if (isScanning) return;
+    if (platform.scanRunsLocally) {
+      void doScan();
+      return;
+    }
+    isConfirmingScan = true;
+  }
+
+  function confirmScan() {
+    isConfirmingScan = false;
+    void doScan();
+  }
+
   async function doScan() {
     if (platform.canPickFolder && !currentFolder) return;
+    // 轮询/误触都可能让本函数重入；ScanGuard 会拒绝并发扫描并报"扫描正在进行中"，
+    // 但那句提示不该被用户看到——重复点击本就该是无声的
+    if (isScanning) return;
     isScanning = true;
     errorMsg = "";
     noticeMsg = "";
@@ -153,7 +186,9 @@
   /**
    * 内置播放失败后的兜底
    *
-   * 两种失败原因，处理方式完全不同：
+   * 三种失败原因，处理方式完全不同：
+   *   - **根本没拿到播放地址**（桌面端回环服务器未启动，`videoSrc` 为空串）：
+   *     交给系统播放器即可，不必确认会话——空 src 与鉴权无关；
    *   - 会话失效（网页端 session 过期，`/video/*` 返回 401）：<video> 的 error
    *     事件不带状态码，与解码失败无法直接区分，因此先向服务端确认一次；
    *     此时该提示重新登录，交给系统播放器也没用（它同样要过鉴权）。
@@ -161,6 +196,9 @@
    *     静态清单只能给出"值得一试"（mkv 在 Chromium 系 webview 能播、在 WebKit 系不能；
    *     同样是 mkv，HEVC 视频轨或 AC3 音轨也会放不出来），因此失败时必须回退到系统
    *     播放器，否则用户看到的是"播放器一闪就没了"。
+   *
+   * `src` 传空串表示"连播放地址都没有"——由 VideoPlayer 在挂载时直接上报
+   * （空 src 不会触发 <video> 的 error 事件，见该组件注释）。
    */
   async function handlePlaybackFailure(message: string) {
     const failed = currentVideo;
@@ -169,9 +207,13 @@
       errorMsg = message;
       return;
     }
-    if (await platform.isPlaybackAuthFailure(failed)) {
-      errorMsg = "登录已过期，请重新登录后再播放";
-      return;
+    if (platform.videoSrc(failed)) {
+      // 有地址却放不出来才需要区分"会话过期"。没有地址时这一次探测毫无意义：
+      // 桌面端恒 false 白跑一趟，网页端则会把"服务器没响应"报成登录过期
+      if (await platform.isPlaybackAuthFailure(failed)) {
+        errorMsg = "登录已过期，请重新登录后再播放";
+        return;
+      }
     }
     if (platform.canOpenWithSystemPlayer) {
       errorMsg = `${message} —— 已改用系统播放器打开`;
@@ -286,11 +328,29 @@
 
 <main class="app">
   {#if currentVideo}
-    <VideoPlayer
-      video={currentVideo}
-      videoSrc={platform.videoSrc(currentVideo)}
-      onClose={() => { currentVideo = null; }}
-      onError={handlePlaybackFailure}
+    <!--
+      {#key} 强制重建播放器：切换视频时同一位置的 {#if} 不会销毁组件，
+      只更新 video 属性——旧元素仍挂着上一个 src、清理逻辑（onMount 的 teardown）
+      也不会跑。加上 key 后每个视频拿到一个全新的 <video>。
+    -->
+    {#key currentVideo.relativePath}
+      <VideoPlayer
+        video={currentVideo}
+        videoSrc={platform.videoSrc(currentVideo)}
+        onClose={() => { currentVideo = null; }}
+        onError={handlePlaybackFailure}
+      />
+    {/key}
+  {/if}
+
+  {#if isConfirmingScan}
+    <ConfirmDialog
+      title="让电脑重新扫描视频目录？"
+      message="扫描会在共享视频的那台电脑上进行，会占用它的磁盘，大目录可能需要几十秒。完成后这里的列表会自动更新。通常不需要手动刷新——电脑上重新扫描后，这里最多等 30 秒就会自动同步。"
+      confirmLabel="开始扫描"
+      cancelLabel="不用了"
+      onConfirm={confirmScan}
+      onCancel={() => { isConfirmingScan = false; }}
     />
   {/if}
 
@@ -303,8 +363,9 @@
     {isPicking}
     canPickFolder={platform.canPickFolder}
     canShare={platform.canShare}
+    scanRunsLocally={platform.scanRunsLocally}
     onSelectFolder={selectFolder}
-    onScan={doScan}
+    onScan={requestScan}
     onStartShare={startShare}
     onStopShare={stopShare}
   />
@@ -362,9 +423,19 @@
   .app {
     display: flex;
     flex-direction: column;
+    /* dvh：手机地址栏收起会改变可视高度，vh 会算大，而 body 是 overflow:hidden，
+       超出的部分滚不到（见 index.html 的说明）。vh 那行留给老内核。 */
     height: 100vh;
+    height: 100dvh;
     padding: 0 20px 20px;
     background: var(--bg);
+  }
+
+  /* 手机：左右留白收窄，把宽度让给文件名 */
+  @media (max-width: 640px) {
+    .app {
+      padding: 0 10px 10px;
+    }
   }
 
   .folder-path {

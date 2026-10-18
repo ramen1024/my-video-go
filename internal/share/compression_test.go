@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func jsonUnmarshal(data []byte, v any) error { return json.Unmarshal(data, v) }
@@ -220,31 +221,73 @@ func TestGzipSkipsLoginPage(t *testing.T) {
 	}
 }
 
-// 认证中间件返回的 401（text/plain）同样会经过 withGzip（路径在白名单内、
-// 客户端支持 gzip），必须能被客户端正确解开——否则前端拿到的是二进制乱码。
-func TestGzipHandles401PlainText(t *testing.T) {
+// /auth 有意不在 gzip 白名单里：响应只有约 91 字节，压缩后反而更大（约 116 字节），
+// 每次登录还只发生一次。这里锁定"不压缩"，避免有人因为"它也是 JSON 接口"加回去。
+func TestGzipSkipsAuth(t *testing.T) {
 	s, _ := newTestServer(t, true)
-	w := doReq(s, "GET", "/videos", "", "", map[string]string{"Accept-Encoding": "gzip"})
-	if w.Code != http.StatusUnauthorized {
-		t.Fatalf("应 401: %d", w.Code)
+	w := doReq(s, "POST", "/auth", `{"password":"1234"}`, "", map[string]string{
+		"Accept-Encoding": "gzip",
+	})
+	if w.Code != http.StatusOK {
+		t.Fatalf("前置条件：应 200，实际 %d", w.Code)
 	}
-	if w.Header().Get("Content-Encoding") != "gzip" {
-		t.Fatalf("401 走白名单路径，应被压缩: %q", w.Header().Get("Content-Encoding"))
+	if ce := w.Header().Get("Content-Encoding"); ce != "" {
+		t.Fatalf("/auth 不应压缩（响应仅约 91 字节）: %q", ce)
 	}
-	// 客户端能解开，得到可读文本（web.ts 会把它当 message 展示）
-	zr, err := gzip.NewReader(w.Body)
-	if err != nil {
-		t.Fatalf("401 正文应为合法 gzip: %v", err)
+	// 不带 Vary：它的表示不随 Accept-Encoding 变化
+	if v := w.Header().Get("Vary"); v != "" {
+		t.Fatalf("/auth 不应声明 Vary: %q", v)
 	}
-	data, err := io.ReadAll(zr)
-	zr.Close()
-	if err != nil {
-		t.Fatalf("解压失败: %v", err)
-	}
-	if !strings.Contains(string(data), "Unauthorized") {
-		t.Fatalf("解压后应为可读文本: %q", data)
+	if !strings.Contains(w.Body.String(), `"success":true`) {
+		t.Fatalf("响应体应为明文 JSON: %q", w.Body.String())
 	}
 }
+
+// gzipResponseWriter 必须实现 Unwrap，否则 http.ResponseController 无法穿透它
+// 取得底层连接，所有 SetReadDeadline/SetWriteDeadline 都会静默退化成
+// "feature not supported"——/auth 的请求体读超时正是这样失效的
+// （带 Accept-Encoding: gzip 的客户端能让 io.ReadAll 无限阻塞）。
+//
+// 端到端的行为回归在 TestAuthStalledBodyIsTimedOut（含 gzip 子用例），
+// 本条锁定类型契约本身：忘记 Unwrap 时立刻红灯，不必等超时行为出问题。
+func TestGzipWriterExposesUnwrap(t *testing.T) {
+	// 底层 writer 支持读超时：Unwrap 接上时 ResponseController 应该能到达它
+	underlying := &deadlineRecorder{}
+	w := &gzipResponseWriter{ResponseWriter: underlying}
+
+	unwrapper, ok := any(w).(interface{ Unwrap() http.ResponseWriter })
+	if !ok {
+		t.Fatal("gzipResponseWriter 必须实现 Unwrap() http.ResponseWriter")
+	}
+	if unwrapper.Unwrap() != http.ResponseWriter(underlying) {
+		t.Fatal("Unwrap 必须返回被包装的 ResponseWriter")
+	}
+
+	// 关键断言：ResponseController 必须能穿透本包装器设上读超时。
+	// 缺 Unwrap 时它返回 "feature not supported"，调用方的超时被静默跳过。
+	if err := http.NewResponseController(w).SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("ResponseController 应能穿透 gzipResponseWriter: %v", err)
+	}
+	if !underlying.readDeadlineSet {
+		t.Fatal("读超时应实际落到被包装的 writer 上")
+	}
+}
+
+// deadlineRecorder 是支持 SetReadDeadline 的最小 ResponseWriter，
+// 用于验证 ResponseController 的 Unwrap 穿透链（httptest.ResponseRecorder 不支持）。
+type deadlineRecorder struct {
+	http.ResponseWriter
+	readDeadlineSet bool
+}
+
+func (d *deadlineRecorder) SetReadDeadline(time.Time) error {
+	d.readDeadlineSet = true
+	return nil
+}
+
+func (d *deadlineRecorder) WriteHeader(int) {}
+
+func (d *deadlineRecorder) Write(b []byte) (int, error) { return len(b), nil }
 
 // Vary 必须无条件写在**所有**走白名单路径的响应上，包括不压缩的那次。
 //

@@ -109,9 +109,11 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 3. 需要暴露给网页端时，同步 `internal/share` 的路由与 `docs/api.md`
 
 **新增一个 HTTP 端点的步骤：** `internal/share/server.go` 注册路由 + handler；
-`docs/api.md` 补契约；`server_test.go` 补测试。**若是 JSON 接口，还要把它加进
-`internal/share/compression.go` 的 `gzipEligiblePaths`（显式枚举，不按前缀推断——
-避免不小心把视频流或二进制压进去）。
+`docs/api.md` 补契约；`server_test.go` 补测试。**若响应体足够大且会被反复拉取**
+（例如列表类 JSON），再加进 `internal/share/compression.go` 的 `gzipEligiblePaths`
+（显式枚举，不按前缀推断——避免不小心把视频流或二进制压进去）。
+判断标准是"压了真的更小、且值得压"，不是"它是 JSON"：`/auth` 是 JSON 但只有约
+91 字节，压完反而更大，所以**不在**列。
 
 ## Quirks
 
@@ -140,10 +142,11 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - `internal/share/login.html` 有两条不变量测试：必须含裸 `<script>` 标签（nonce 注入
   依赖字符串替换）、不得出现 `#rgb` / `rgb(` / `rgba(` 硬编码颜色（颜色一律来自注入的
   theme 令牌）
-- 浏览器端 CSP（`internal/share/response.go` 的 `browserCSP`）依赖**"Vite 产物没有内联
+- 浏览器端 CSP（`internal/share/response.go` 的 `BrowserCSP`）依赖**"Vite 产物没有内联
   script"**这一前提，所以是 `script-src 'self'` 而无需 nonce；`scripts/check-web-build.mjs`
   会断言产物无内联脚本。若升级构建工具后产物出现内联脚本，白屏会在运行时才暴露——
-  改 CSP 的同时必须同步该检查
+  改 CSP 的同时必须同步该检查。既是常量也是**桌面端策略的派生源**（见下条），
+  因此导出——改名时要一起看 `desktop_csp.go`
 - **视频扩展名一律按小写比较**：`videoTypes` 的键是小写，查表前必须 `ToLower`；
   `/video/*` 的白名单与 Content-Type 复用**同一个已小写化**的扩展名（`Movie.MP4`
   必须拿到 `video/mp4`）
@@ -166,7 +169,26 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   压缩字节**（`statusBodyless` 会撤掉 `Content-Encoding` 且不启动压缩器，否则
   那 10 字节 gzip 块头会污染客户端缓存）。压缩在 `WriteHeader` 时启用而非进入
   handler 前——`Content-Encoding` 是响应头，handler 一旦 `WriteHeader` 就改不了。
-  同一 ETag 对应两种字节表示，**必须**保留 `Vary: Accept-Encoding`
+  同一 ETag 对应两种字节表示，**必须**保留 `Vary: Accept-Encoding`。
+  **准入标准是"响应够大且会被反复拉取"，不是"它是 JSON"**：`/auth` 有意不在列
+  （响应约 91 字节，gzip 后反而 116 字节，每次登录只发生一次）
+- **响应包装器必须实现 `Unwrap() http.ResponseWriter`**：内嵌 `http.ResponseWriter`
+  （接口）**不会**把底层类型的方法提升上来，`http.ResponseController` 只认
+  `interface{ SetReadDeadline(...) }` 或 `Unwrap()` 二者之一，于是缺了它时
+  `SetReadDeadline` 一律返回 `feature not supported`，调用方的超时被**静默跳过**。
+  `gzipResponseWriter` 就是这样让 `/auth` 的请求体读超时对**所有真实浏览器**
+  （都发 `Accept-Encoding: gzip`）失效的——`TestGzipWriterExposesUnwrap` 锁契约，
+  `TestAuthStalledBodyIsTimedOut` 含 gzip 子用例锁行为。新增任何包装
+  `ResponseWriter` 的中间件时都要检查这一条
+- **桌面端 CSP 由 `share.BrowserCSP` 派生**（根包 `desktop_csp.go`）：Wails v2
+  **没有** CSP 配置项（原 Tauri 版有 `tauri.conf.json` 的 `app.security.csp`），
+  只能经 `assetserver.Options.Middleware` 逐响应注入，接线在 `main.go`。
+  两侧策略只有 `media-src` 一处不同：桌面端内联播放走 `internal/player` 的
+  **回环** HTTP 服务器（随机端口，与资产源 `http://wails.localhost` 不同源），
+  不放行则视频全被拦。**只多放行回环**（`http://127.0.0.1:*`），不得放宽成 `*`。
+  `desktop_csp_test.go` 逐指令比对两侧 + 断言 `main.go` 真的接了中间件
+  （自建 options 的测试证明不了装配，那是本项目踩过的坑）。
+  注意 `wails dev` 会把 Middleware 置 nil，本策略只在 `wails build` 产物生效
 - `INLINE_PLAYABLE_EXTENSIONS`（format.ts，能否内联播放）是**启发式清单不是保证**：
   不要改成 `canPlayType` 探测（假阴性），不要当硬保证；`VideoPlayer` 的播放失败回退
   （error 事件 → 系统播放器，页面侧在 App.svelte 的 handlePlaybackFailure）不能删。

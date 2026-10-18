@@ -68,6 +68,12 @@ func TestShareStatus(t *testing.T) {
 	if status.Running || status.Port != 0 || len(status.IPs) != 0 {
 		t.Fatalf("未运行时状态应全空: %+v", status)
 	}
+	// folder_path 必须**无条件**返回：前端恢复界面（restoreBackendState）靠它
+	// 同时恢复目录与列表，只在 Running 时给会让"扫描过但没开共享"的场景在
+	// webview 重载后丢失列表。曾经的实现就漏了这一条断言而静默回归。
+	if status.FolderPath != `D:\videos` {
+		t.Fatalf("未运行时也应返回 folder_path（恢复界面依赖）: %q", status.FolderPath)
+	}
 
 	if err := st.StartServerStarting(); err != nil {
 		t.Fatal(err)
@@ -83,7 +89,7 @@ func TestShareStatus(t *testing.T) {
 		t.Fatalf("运行中状态不符: %+v", status)
 	}
 
-	// 停止后 share_info 必须被清空
+	// 停止后 share_info 必须被清空，但 folder_path 仍要保留（用户没换目录）
 	if err := st.StartServerStopping(); err != nil {
 		t.Fatal(err)
 	}
@@ -91,6 +97,9 @@ func TestShareStatus(t *testing.T) {
 	status = st.ShareStatus()
 	if status.Running || status.Port != 0 || len(status.IPs) != 0 {
 		t.Fatalf("停止后应清空 share_info: %+v", status)
+	}
+	if status.FolderPath != `D:\videos` {
+		t.Fatalf("停止后 folder_path 应保留: %q", status.FolderPath)
 	}
 }
 

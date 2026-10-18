@@ -71,6 +71,18 @@ export interface Platform {
    */
   readonly listPollIntervalMs: number | null;
 
+  /**
+   * 扫描是否发生在**当前这台设备**上
+   *
+   * 桌面端为 `true`：扫描的是本机磁盘，点一下就是本机的代价。
+   *
+   * 网页端为 `false`：扫描跑在**共享方那台电脑**上。同一个人用手机点一下，
+   * 那台电脑就要满速读盘（大目录是几十秒的持续 IO）。因此 UI 必须做两件事：
+   * 换文案（"刷新"会被理解成"刷新我这个页面"）并加二次确认，
+   * 见 `App.svelte` 的 `requestScan` 与 `Header.svelte` 的按钮文案。
+   */
+  readonly scanRunsLocally: boolean;
+
   /** 选择本机文件夹；不支持或用户取消时返回 `null` */
   pickFolder(): Promise<string | null>;
 

@@ -2,6 +2,90 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式。
 
+## [Unreleased]
+
+### 变更
+
+- **"刷新"按钮改名并分平台文案**：桌面端是"重新扫描"（扫的是本机），
+  网页端是"**重新扫描电脑**"（扫的是共享方那台电脑）。同一个按钮在两侧的代价
+  完全不同，而"刷新"在手机上的默认理解是"刷新我这个页面"——用户点完看不到
+  立即变化，会以为没生效而连点，把对方电脑按在几十秒的持续读盘里
+- **网页端点"重新扫描电脑"要先二次确认**（新增 `ConfirmDialog` 组件）。
+  该动作的磁盘代价落在**别人的电脑**上，而按钮在手机上极易误触；确认框的
+  默认焦点在"取消"上，正文说明"通常不需要手动刷新——电脑上重新扫描后，
+  这里最多等 30 秒就会自动同步"。桌面端不加确认（扫的是自己的机器，
+  加一层只是碍事），由新增的能力标志 `Platform.scanRunsLocally` 分流
+
+### 修复
+
+- **桌面端回环播放服务器未就绪时"点了没反应"**：`videoSrc` 返回空串，
+  而空串赋给 `<video>` 的 `src` 是无效赋值——既不播放、也不派发 `error` 事件，
+  于是既不放也不回退系统播放器，用户只看到"点了一下什么都没发生"。
+  现在模板改为不渲染该属性（空 `src` 会被当成相对 URL 去拉页面自身），
+  并在挂载时直接上报播放失败，走既有的"回退系统播放器"路径。
+  同一次修复还去掉了这次失败路径上多余的 401 探测（桌面端恒 false 白跑一趟，
+  网页端会把"服务器没响应"误报成登录过期）
+- **播放器切换视频时不重置**：`{#if currentVideo}` 内的组件不会因属性变化而
+  重建，旧元素仍持着上一个 `src`、清理逻辑也不跑。现按 `relativePath` 加
+  `{#key}`，每个视频拿到全新的 `<video>`
+
+### 新增
+
+- **手机端播放与列表适配**（网页端主要就是手机在用）：
+  - `<video>` 补 `playsinline`（移动 Safari 默认接管全屏原生播放器，
+    页面里的"关闭"按钮会失效），老内核要的 `webkit-playsinline` 经
+    `setAttribute` 补上（写成模板属性会被 Svelte 当未知属性剔掉）
+  - 高度改用 `dvh`（SPA 容器、播放器、`index.html` 的 `html/body` 三处），
+    并在 `index.html` 补 `theme-color`。`100vh` 在手机上算的是"地址栏收起时"
+    的高度，而 `body` 是 `overflow: hidden`——超出可视区的部分**没有任何滚动条
+    能滚到**，横屏时控制条会被切掉一块
+  - 列表在 ≤640px 断点从四列并排改为两行卡片（四列合计 444px 已接近屏宽，
+    文件名只剩两三个字）；表头随之隐藏，排序改为工具栏里的一枚循环按钮——
+    **能力不因隐藏而丢失**。行高由 JS 同步切换（虚拟列表按 `estimateSize`
+    布置绝对定位的行，两侧不一致会让行互相叠住）
+  - 补"正在加载…"提示（此前服务器没响应时控件条只是无限转圈）与
+    播放期间的屏幕常亮（`navigator.wakeLock`，能力探测 + 卸载时释放），
+    并让"减弱动态效果"偏好下不再跳动
+
+### 安全
+
+- **`/auth` 的请求体读超时在带 `Accept-Encoding: gzip` 时完全失效**。
+  `gzipResponseWriter` 只内嵌了 `http.ResponseWriter`，**没有实现 `Unwrap()`**，
+  而内嵌接口不会把底层类型的方法提升上来——`http.ResponseController` 因此取不到
+  真正的连接，`SetReadDeadline` 静默返回 `feature not supported`。`/auth` 恰在
+  gzip 白名单内，而**每个真实浏览器都会发 `Accept-Encoding`**，于是"发完头不发体"
+  的客户端能让 `io.ReadAll` 无限阻塞，每个连接白占一个 goroutine + 一个 socket
+  （`ReadHeaderTimeout` 只管请求头，全局 `ReadTimeout` 又因视频流而有意留空）。
+  实测：不带该头 5.0s 被掐断，带上则 12s 仍无响应。修法是给包装器补 `Unwrap()`，
+  并把回归测试扩成"含 gzip 子用例"——原来那条不带该头，正好从 bug 旁边走了过去
+- **桌面端 webview 补上 CSP**。原 Tauri 版由 `tauri.conf.json` 的
+  `app.security.csp` 提供并有 `csp_tests.rs` 守着，而 **Wails v2 没有 CSP 配置项**，
+  重写后桌面端实际处于"无任何 CSP"状态（浏览器端一直都有）。现经
+  `assetserver.Middleware` 逐响应注入，策略**由 `share.BrowserCSP` 派生**，
+  两侧仅 `media-src` 一处不同（桌面端内联播放走 `internal/player` 的回环服务器，
+  与资产源不同源，不放行则视频全被拦），差异由 `desktop_csp_test.go` 逐指令锁定
+
+### 修复
+
+- **`ShareStatus` 在共享未运行时丢弃 `folder_path`**，导致桌面端 webview 重载后
+  无法恢复共享目录与视频列表（`App.svelte` 的 `restoreBackendState` 正是靠它）。
+  原 Tauri 版无条件返回该字段；Go 版把赋值放在了 `if !running { return }` 之后。
+  原有测试只断言了 `Running/Port/IPs`，因此这条回归没有任何测试把守
+
+### 变更
+
+- `/auth` 移出 `gzipEligiblePaths`：其响应约 91 字节，gzip 后**反而增大**到约 116 字节，
+  而每次登录只发生一次，压缩纯属净亏损（新准入标准是"响应够大且会被反复拉取"）
+
+### 清理
+
+- 删除无调用者的 `state.ServerState.String()` 与 `constants.VideoTypes()`
+  （后者的注释自己承认一致性脚本并不使用它）；把 `SetVideos`/`SetFolderPath`
+  标注为仅供测试，生产路径一律走 `SetScanResult`（列表与目录必须一次发布）
+- 修正 `password.CleanupOnce` 的失实注释：它称"`/auth` 入口会顺带调用"，
+  而 `internal/share/auth.go` 明确说明**不调用**（该端点免鉴权可被反复打，
+  抢 `m.mu` 会拖慢整站）——性能修复后忘了回头改注释
+
 ## [0.4.2] - 2026-10-14
 
 ### 安全

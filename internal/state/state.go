@@ -24,19 +24,6 @@ const (
 	StateStopping
 )
 
-func (s ServerState) String() string {
-	switch s {
-	case StateStarting:
-		return "Starting"
-	case StateRunning:
-		return "Running"
-	case StateStopping:
-		return "Stopping"
-	default:
-		return "Stopped"
-	}
-}
-
 // VideoList 是一次扫描结果的不可变快照（列表 + 对应 ETag）。
 type VideoList struct {
 	Videos []models.VideoFile
@@ -108,8 +95,8 @@ func (s *AppState) SetScanResult(videos []models.VideoFile, folder string) {
 
 // SetVideos 只替换列表，保留当前共享目录（同样是一次原子发布）。
 //
-// 生产代码走 SetScanResult（列表与目录来自同一次扫描）；这个变体用于
-// 只换列表、不动目录的场景（测试与未来的其它列表来源）。
+// **仅供测试**（以及将来可能出现的、确实"只换列表"的数据源）：生产路径一律走
+// SetScanResult——列表与目录必须来自同一次发布，见 Snapshot 的说明。
 func (s *AppState) SetVideos(videos []models.VideoFile) {
 	s.SetScanResult(videos, s.FolderPath())
 }
@@ -122,6 +109,8 @@ func (s *AppState) FolderPath() string {
 }
 
 // SetFolderPath 只替换共享目录，保留当前列表（同样是一次原子发布）。
+//
+// **仅供测试**：生产路径走 SetScanResult（目录来自用户选中的那次扫描）。
 func (s *AppState) SetFolderPath(p string) {
 	prev := s.snap.Load()
 	next := &Snapshot{
@@ -261,6 +250,11 @@ func (s *AppState) IsServerRunning() bool {
 // ShareStatus 汇总当前共享状态（webview 重载后恢复界面的唯一来源）。
 // running / shareInfo / folder_path 在**同一临界区内**读取，保证三者一致：
 // folder_path 若在解锁后再读，就可能描述另一个目录（扫描正好在那一刻发布）。
+//
+// folder_path **不受 running 影响**（对齐原 Tauri 版）：它表达的是"上次扫描/选择的
+// 目录"，而前端恢复界面正是靠它同时恢复目录与列表（App.svelte 的 restoreBackendState）。
+// 曾经只在 Running 时才返回它，于是"扫描过但没开共享"的状态下 webview 一重载，
+// 目录与列表双双消失，用户看到空列表且无从恢复。
 func (s *AppState) ShareStatus() models.ShareStatus {
 	s.srvMu.Lock()
 	running := s.srvState == StateRunning
@@ -268,7 +262,8 @@ func (s *AppState) ShareStatus() models.ShareStatus {
 	folder := s.FolderPath()
 	s.srvMu.Unlock()
 
-	status := models.ShareStatus{Running: running, IPs: []string{}}
+	// folder_path 无条件带上；running/ips/port 才是"运行中"才有的信息
+	status := models.ShareStatus{Running: running, FolderPath: folder, IPs: []string{}}
 	if !running {
 		return status
 	}
@@ -276,6 +271,5 @@ func (s *AppState) ShareStatus() models.ShareStatus {
 		status.IPs = info.IPs
 		status.Port = info.Port
 	}
-	status.FolderPath = folder
 	return status
 }

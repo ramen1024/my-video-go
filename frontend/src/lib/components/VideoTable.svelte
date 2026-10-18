@@ -5,7 +5,7 @@
   桌面端与网页端共用：条目统一为 $lib/platform 的 VideoItem。
 -->
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, onMount } from "svelte";
   import { get } from "svelte/store";
   import { createVirtualizer } from "@tanstack/svelte-virtual";
   import type { VideoItem } from "$lib/platform";
@@ -69,8 +69,34 @@
   /** 全部视频的总大小（不受搜索过滤影响，与"共 N 个视频"口径一致） */
   let totalSize = $derived(videos.reduce((sum, v) => sum + v.size, 0));
 
-  // 行高与正文（13px）相称：56px 是给"单元格静默继承浏览器默认 16px"时用的
-  const ROW_HEIGHT = 48;
+  /**
+   * 窄屏断点，必须与 CSS 里那条 `@media (max-width: 640px)` 保持一致
+   *
+   * 两处写死同一个数字是这里唯一可靠的联动方式：行高是 JS 给的
+   * （虚拟列表按 estimateSize 决定每行的位置与总高度），而换行布局是 CSS 给的，
+   * 两者若不一致，行会互相叠住或留下大片空隙。改断点时必须同时改这里。
+   */
+  const NARROW_MAX_WIDTH_PX = 640;
+
+  /**
+   * 行高
+   *
+   * 桌面端是单行（48px，与 13px 正文相称）；窄屏是两行卡片
+   * （文件名一行 + "大小 · 日期"一行），48px 装不下会上下叠住。
+   */
+  const ROW_HEIGHT_DESKTOP = 48;
+  const ROW_HEIGHT_NARROW = 68;
+
+  let isNarrow = $state(false);
+  let rowHeight = $derived(isNarrow ? ROW_HEIGHT_NARROW : ROW_HEIGHT_DESKTOP);
+
+  onMount(() => {
+    const mql = window.matchMedia(`(max-width: ${NARROW_MAX_WIDTH_PX}px)`);
+    const sync = () => { isNarrow = mql.matches; };
+    sync();
+    mql.addEventListener("change", sync);
+    return () => mql.removeEventListener("change", sync);
+  });
 
   let scrollElement: HTMLDivElement | null = $state(null);
 
@@ -78,18 +104,34 @@
     // svelte-ignore state_referenced_locally
     count: displayVideos.length,
     getScrollElement: () => scrollElement,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     getItemKey: (index) => displayVideos[index]?.relativePath ?? index,
   });
 
   // 必须用 $effect.pre（渲染**前**同步 count）：普通 $effect 在渲染后才跑，
   // 于是过滤/排序让列表变短的那一次渲染仍会拿到旧范围的 index，
   // 渲染出一个不存在的行（表现为偶发丢行，靠模板里的 {#if video} 兜住）。
+  //
+  // rowHeight 也要进来，且有**两个**前提，缺一个就会在跨断点时出错：
+  //   ① 必须在 effect 体里真的读一次 `rowHeight`——写进 `() => rowHeight`
+  //      这种闭包是不算依赖的（虚拟列表自己去调它，effect 根本不知道它变了），
+  //      症状是"缩窄屏行高变了、拉宽再也不会变回来"；
+  //   ② estimateSize 变了必须 `measure()` 强制重算，否则已缓存的测量值
+  //      仍按旧高度布置绝对定位的行。
+  let prevRowHeight = ROW_HEIGHT_DESKTOP;
+
   $effect.pre(() => {
-    get(virtualizer).setOptions({
+    const h = rowHeight;
+    const v = get(virtualizer);
+    v.setOptions({
       count: displayVideos.length,
+      estimateSize: () => h,
       getItemKey: (index) => displayVideos[index]?.relativePath ?? index,
     });
+    if (h !== prevRowHeight) {
+      prevRowHeight = h;
+      v.measure();
+    }
   });
 
   function sortLabel(field: SortField): string {
@@ -127,13 +169,53 @@
     const suffix = `.${ext}`;
     return name.toLowerCase().endsWith(suffix.toLowerCase()) ? name.slice(0, -suffix.length) : name;
   }
+
+  /**
+   * 手机上用的排序：点一次换字段，再点一次换方向
+   *
+   * 表头在窄屏被隐藏（四列并排会把文件名压成两三个字），若不补这个入口，
+   * 手机上就彻底没法排序了。复用同一组 sortField/sortDirection 状态，
+   * 与桌面端的表头排序是同一份逻辑。
+   */
+  const MOBILE_SORT_FIELDS: SortField[] = ["name", "size", "modified"];
+
+  function cycleSort() {
+    if (sortField === "name" && sortDirection === "asc") {
+      // 首点：最常见的诉求是"按名字排"，已经在默认值时直接给一个可见变化
+      sortDirection = "desc";
+      return;
+    }
+    const idx = MOBILE_SORT_FIELDS.indexOf(sortField);
+    const next = MOBILE_SORT_FIELDS[(idx + 1) % MOBILE_SORT_FIELDS.length];
+    if (next === sortField) {
+      sortDirection = sortDirection === "asc" ? "desc" : "asc";
+      return;
+    }
+    sortField = next;
+    sortDirection = "asc";
+  }
+
+  function mobileSortLabel(): string {
+    return `${sortLabel(sortField)}${sortDirection === "asc" ? " ↑" : " ↓"}`;
+  }
 </script>
 
 <div class="video-toolbar">
   <div class="video-count">共 {videos.length} 个视频 · 总计 {formatFileSize(totalSize)}</div>
-  <div class="search-box">
-    <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-    <input type="text" placeholder="搜索视频..." value={searchTerm} oninput={handleSearchInput} aria-label="搜索视频" />
+  <div class="toolbar-actions">
+    <!-- 只在窄屏显示（CSS 控制）：替代表头里的列排序 -->
+    <button
+      class="sort-cycle-btn"
+      onclick={cycleSort}
+      aria-label="切换排序方式，当前为{sortLabel(sortField)}{sortDirection === 'asc' ? '升序' : '降序'}"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13M3 12h9M3 18h5M17 8v8M17 16l3-3M17 16l-3-3"></path></svg>
+      {mobileSortLabel()}
+    </button>
+    <div class="search-box">
+      <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+      <input type="text" placeholder="搜索视频..." value={searchTerm} oninput={handleSearchInput} aria-label="搜索视频" />
+    </div>
   </div>
 </div>
 
@@ -241,6 +323,35 @@
     font-variant-numeric: tabular-nums;
   }
 
+  .toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 0 0 auto;
+  }
+
+  /* 窄屏排序按钮：桌面端隐藏（那边用表头排序，功能等价且更直观） */
+  .sort-cycle-btn {
+    display: none;
+    align-items: center;
+    gap: 5px;
+    padding: 7px 10px;
+    font-size: var(--fs-sm);
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--surface-hover);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background-color 0.15s ease, color 0.15s ease;
+  }
+
+  .sort-cycle-btn:hover {
+    background: var(--surface-raised);
+    color: var(--text-strong);
+  }
+
   .search-box {
     flex: 0 0 auto;
     width: 220px;
@@ -302,6 +413,10 @@
     flex: 1;
     min-height: 0;
   }
+
+  /* 手机端的覆盖规则统一放在**本样式块末尾**（见文件最后那段 @media）：
+     这里若也放一份，同特异性下会被后面的基础规则盖掉——媒体查询不提升优先级，
+     它只按源码顺序参与级联（这个坑已经踩过一次：整行仍是 grid、四列挤在一行）。 */
 
   .table-header {
     background: var(--bg);
@@ -381,7 +496,8 @@
     background: var(--surface-hover);
   }
 
-  /* 行高由 ROW_HEIGHT 决定，单元格不再用自己 padding 撑高度 */
+  /* 行高由 rowHeight（JS）决定，单元格不再用自己 padding 撑高度；
+     断点两侧的行高常量见脚本顶部的 ROW_HEIGHT_DESKTOP / ROW_HEIGHT_NARROW */
   .table-row > div {
     padding: 0 16px;
     font-size: var(--fs-md);
@@ -484,5 +600,78 @@
 
   .table-body-container::-webkit-scrollbar-thumb:hover {
     background: var(--text-tertiary);
+  }
+
+  /**
+   * 手机端布局（**必须放在本样式块末尾**）
+   *
+   * 四列并排合计 444px（180+92+116+56）已接近手机屏宽，文件名只剩两三个字，
+   * 因此窄屏改成两行卡片：第一行文件名占满，第二行是"大小 · 日期" + 操作按钮。
+   *
+   * ⚠️ 位置是本规则成立的前提：媒体查询**不提升特异性**，同特异性下只按源码
+   * 顺序参与级联。这段若放在中间，后面的 `.table-row { display: grid; … }`
+   * 会把它整段盖掉——症状是"手机上四列仍然挤在一行"，而且检查器里规则明明在。
+   */
+  @media (max-width: 640px) {
+    /* 表头是 grid（列名与列宽一一对应），两行布局下它对不上位置，直接隐藏。
+       排序能力改由工具栏里的循环按钮提供，不因隐藏而丢失。 */
+    .table-header {
+      display: none;
+    }
+
+    .sort-cycle-btn {
+      display: inline-flex;
+    }
+
+    .video-toolbar {
+      padding: 10px 12px;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    /* 搜索框占满第二行：220px 的固定宽度在窄屏会把计数挤掉 */
+    .toolbar-actions {
+      width: 100%;
+    }
+
+    .search-box {
+      flex: 1 1 auto;
+      width: auto;
+      min-width: 0;
+    }
+
+    /* 整行改 flex-wrap：col-name 占满第一行，其余三项落在第二行。
+       不能用 grid —— col-size 与 col-date 会落进同一个单元格互相叠住。 */
+    .table-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      padding: 8px 0;
+    }
+
+    .table-row > div {
+      padding: 0 12px;
+    }
+
+    .col-name {
+      flex: 1 1 100%;
+      min-width: 0;
+    }
+
+    /* 第二行：大小 → 日期 →（靠右）操作 */
+    .col-size {
+      order: 1;
+      text-align: left;
+    }
+
+    .col-date {
+      order: 2;
+    }
+
+    .col-action {
+      order: 3;
+      margin-left: auto;
+      padding-right: 12px;
+    }
   }
 </style>
