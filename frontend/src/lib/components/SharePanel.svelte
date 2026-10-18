@@ -141,7 +141,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 13px;
+    font-size: var(--fs-md);
     font-weight: 600;
     color: var(--success);
   }
@@ -164,7 +164,7 @@
     border: 1px solid var(--border-strong);
     background: var(--surface-hover);
     color: var(--text-secondary);
-    font-size: 12px;
+    font-size: var(--fs-caption);
     font-weight: 500;
     cursor: pointer;
     transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
@@ -184,7 +184,7 @@
 
   .selected-link {
     color: var(--accent-light);
-    font-size: 13px;
+    font-size: var(--fs-md);
     font-weight: 600;
     cursor: pointer;
     background: none;
@@ -208,7 +208,7 @@
   }
 
   .firewall-hint {
-    font-size: 12px;
+    font-size: var(--fs-caption);
     color: var(--text-tertiary);
   }
 

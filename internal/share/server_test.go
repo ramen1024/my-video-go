@@ -898,3 +898,51 @@ func TestLoginTemplateInvariants(t *testing.T) {
 		t.Fatal("internal/share/theme.css 与 frontend/src/lib/styles/theme.css 不一致，请重新拷贝")
 	}
 }
+
+// TestThemeHasBorderBoxBaseline 锁定全局盒模型基线。
+//
+// 这不是风格检查，是一处曾经真实存在的布局缺陷的**回归测试**：
+// SPA 的 theme.css 缺少 `box-sizing: border-box` 时（登录页有、SPA 没有，
+// 两端因此表现不同），`.search-box input { width: 100%; padding: 0 12px 0 30px }`
+// 里那 100% 是内容宽，实际外框比 220px 的父容器宽出 43.6px。工具栏溢出的
+// 27.6px 让 `.content`（当时是 overflow: hidden，仍是滚动容器）产生横向滚动区，
+// 输入框一获得焦点浏览器就把它滚进可视区，整列文件名被**永久**裁掉
+// （「共 7 个视频」→「7 个视频」、「v1.2final」→「.2final」）。
+//
+// 删掉这条规则不会有任何编译错误，症状只在用户点一下搜索框之后出现。
+func TestThemeHasBorderBoxBaseline(t *testing.T) {
+	for _, sel := range []string{"*", "*::before", "*::after"} {
+		// 允许换行与空白差异，只要求选择器出现在同一个逗号分隔的规则里
+		if !strings.Contains(themeCSS, sel) {
+			t.Errorf("theme.css 缺少 `%s { box-sizing: border-box }` 基线规则", sel)
+		}
+	}
+	if !regexp.MustCompile(`(?s)\*,[^{]*\{[^}]*box-sizing:\s*border-box`).MatchString(themeCSS) {
+		t.Fatal("theme.css 的全局 box-sizing: border-box 规则缺失或被改写——" +
+			"缺少它会让搜索框撑破工具栏，点一下输入框就会永久裁掉文件名列")
+	}
+}
+
+// TestLoginTemplateAllowsZoom 锁定"允许缩放"。
+//
+// 登录页曾经写 `user-scalable=no`（SPA 的 index.html 没有）。禁止缩放对
+// 低视力用户是硬障碍（WCAG 1.4.4 要求可缩放到 200%），而输 4 位密码时
+// 想放大看清恰恰是合理需求。
+//
+// ⚠️ 断言必须匹配 **meta 标签那一行**，不能对全文搜 "user-scalable=no"：
+// 模板里解释"为什么不要这么做"的注释本身含这个字符串，全文匹配会把正确
+// 的代码判成违规（AGENTS.md 里 format.ts 的 canPlayType 检查踩过同一个坑）。
+func TestLoginTemplateAllowsZoom(t *testing.T) {
+	viewport := regexp.MustCompile(`<meta\s+name="viewport"\s+content="([^"]*)"`).FindStringSubmatch(loginTemplate)
+	if viewport == nil {
+		t.Fatal("登录页缺少 viewport meta 标签")
+	}
+	content := viewport[1]
+	if strings.Contains(content, "user-scalable=no") || strings.Contains(content, "maximum-scale=1") {
+		t.Fatalf("登录页不得禁止缩放（实际 viewport: %q）：user-scalable=no 会让低视力用户"+
+			"无法放大，且与 index.html 的 viewport 不一致", content)
+	}
+	if !strings.Contains(content, "width=device-width") {
+		t.Fatalf("登录页 viewport 应保留 width=device-width，实际 %q", content)
+	}
+}

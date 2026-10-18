@@ -19,22 +19,37 @@
  * - 文字分五级：text / strong / secondary / tertiary / faint
  */
 :root {
-  /* 背景层级 */
-  --bg: #0f172a;
-  --surface: #111827;
-  --surface-hover: rgba(255, 255, 255, 0.04);
+  /* 让原生控件也走深色：<video controls> 的控制条、滚动条、<input> 的
+     自动填充底色都跟随内核决定，缺了这条时它们会按"浅色页面"渲染，
+     在深色界面里出现一条刺眼的白控制条 */
+  color-scheme: dark;
+
+  /* 背景层级
+     两层的**明度**必须真的拉开：此前 --bg #0f172a 与 --surface #111827
+     只有 1.01:1，等于同一块色 —— 内容面板与页面背景在视觉上完全重合，
+     全靠一圈 1.17:1 的边框区分。现在 1.2:1，并统一到同一色族
+     （两者都是蓝调，此前 slate-900 与中性 gray-900 并排会显出"脏"感）。
+     下面所有文字级的不透明度，都是以 --surface 为基准确认过对比度的。 */
+  --bg: #070b14;
+  --surface: #161f33;
+  --surface-hover: rgba(255, 255, 255, 0.05);
   --surface-raised: rgba(255, 255, 255, 0.08);
   --surface-pressed: rgba(255, 255, 255, 0.12);
 
-  /* 边框 */
-  --border: rgba(255, 255, 255, 0.06);
-  --border-faint: rgba(255, 255, 255, 0.04);
-  --border-strong: rgba(255, 255, 255, 0.1);
+  /* 边框
+     在 --surface 上分别约 1.18 / 1.3 / 1.44:1。
+     faint 只用在不该抢视线的分隔线（表格行），border 是常规描边，
+     strong 给需要被看见的控件边界（输入框、次要按钮）。 */
+  --border: rgba(255, 255, 255, 0.09);
+  --border-faint: rgba(255, 255, 255, 0.06);
+  --border-strong: rgba(255, 255, 255, 0.12);
 
   /* 文字（五级，靠明度而非色相分层）
-     对比度以最低的背景层 --surface 为基准算得，--bg 上更高：
-     secondary 7.2:1 / tertiary 5.7:1 / faint 4.7:1 —— 三级以上均可承载正文，
-     不必再为"这行字能不能看清"单独调透明度 */
+     对比度以最低的背景层 --surface (#161f33) 为基准算得，--bg 上更高：
+     secondary 7.1:1 / tertiary 5.3:1 / faint 4.5:1 —— 三级以上均可承载正文，
+     不必再为"这行字能不能看清"单独调透明度。
+     faint 恰好卡在 AA 的 4.5:1 上，**不要再往下调**：placeholder 与
+     次要元数据都用它，掉到 4.4 就是实际不可读。 */
   --text: #f8fafc;
   --text-strong: rgba(255, 255, 255, 0.9);
   --text-secondary: rgba(255, 255, 255, 0.62);
@@ -70,15 +85,22 @@
   --warning-soft: rgba(251, 191, 36, 0.1);
   --warning-border: rgba(251, 191, 36, 0.2);
 
-  /* 共享按钮（绿色实底） */
-  --share: #059669;
-  --share-hover: #10b981;
-  --share-active: #047857;
+  /* 共享按钮（绿色实底）
+     --share 必须压到这个深度：白字在 #059669 上只有 3.77:1，
+     而 13px 常规字重不享受"大字豁免"，AA 要求 4.5:1。
+     现在 5.48:1；hover 用原来那个 #059669（5.48 仍达标，只是略亮），
+     active 再压一档。此前 hover 反而更亮（#10b981 上白字仅 2.54:1），
+     等于鼠标一放上去文字就糊掉。 */
+  --share: #047857;
+  --share-hover: #059669;
+  --share-active: #036c4f;
 
-  /* 特殊场景 */
+  /* 特殊场景
+     scrim 的色相跟随新的 --bg（原来硬编码的是旧底色 rgb(15,23,42)）：
+     它铺在深色内容之上，颜色一旦和底色分家就会浮出一层蓝灰。 */
   --overlay: rgba(0, 0, 0, 0.85);
-  --scrim: rgba(15, 23, 42, 0.6);
-  --scrim-strong: rgba(15, 23, 42, 0.9);
+  --scrim: rgba(7, 11, 20, 0.6);
+  --scrim-strong: rgba(7, 11, 20, 0.9);
   --black: #000000;
   --white: #ffffff;
 
@@ -93,18 +115,45 @@
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
 
   /* 字号阶梯：正文基准 13px（--fs-md），由下面的 body 规则落地。
-     没有它时表格单元格会静默继承浏览器默认的 16px，比工具栏还大 */
+     没有它时表格单元格会静默继承浏览器默认的 16px，比工具栏还大。
+     ⚠️ 组件里不要写 font-size 字面量：此前有 16 处 12/13/14/16/18/22px
+     绕过了这组令牌，改基准字号时它们不会跟着变。 */
   --fs-xs: 11px;
   --fs-sm: 12px;
   --fs-md: 13px;
   --fs-lg: 14px;
   --fs-xl: 16px;
   --fs-2xl: 20px;
-  --fs-3xl: 22px;
+
+  /* 语义字号：不随正文缩放，按用途命名
+     -digit：4 位 PIN 的大数字（SPA 的密码面板与登录页共用同一档）
+     -caption：提示条、徽章等附属文字 */
+  --fs-digit: 22px;
+  --fs-caption: 12px;
 
   /* 阴影 */
   --shadow-lg: 0 24px 80px rgba(0, 0, 0, 0.6);
   --shadow-card: 0 16px 48px rgba(0, 0, 0, 0.4);
+}
+
+/**
+ * 盒模型基线：**全局** border-box
+ *
+ * 这不是风格偏好，是一处曾经真实存在的布局缺陷的修复。缺了它时，
+ * `.search-box input { width: 100%; padding: 0 12px 0 30px; border: 1px }`
+ * 里的 100% 是**内容宽**，实际外框比 220px 的父容器宽出 43.6px ——
+ * 工具栏溢出的那 27.6px 让 `.content`（overflow: hidden，仍是滚动容器）
+ * 产生横向滚动区。输入框一获得焦点，浏览器把它滚进可视区，`.content`
+ * 的 scrollLeft 跳到 28px 并且**再也回不去**：整列文件名被永久裁掉
+ * （「共 7 个视频」→「7 个视频」、「v1.2final」→「.2final」）。
+ *
+ * 登录页（internal/share/login.html）本来就有 `* { box-sizing: border-box }`，
+ * 于是同一份令牌在两端表现不同 —— 这一条让两端重新对齐。
+ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
 }
 
 /**
@@ -120,8 +169,14 @@ body {
   line-height: 1.5;
 }
 
-/* :where() 使这条规则特异性为 0，组件需要自行处理焦点样式时可直接覆盖 */
+/* :where() 使这条规则特异性为 0，组件需要自行处理焦点样式时可直接覆盖。
+ *
+ * 双层环而不是单层：内圈 --bg 色（或任意深色）与外圈 --accent-light 叠在一起，
+ * 于是无论焦点元素本身是什么底色都能看清。单层 accent-light 在深色页面上
+ * 有 7:1 没问题，但落在**主按钮的蓝底**上只有 2.03:1、落在共享绿底上 1.48:1，
+ * 等于在最需要看见焦点的两个地方消失了。 */
 :where(button, a, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--accent-light);
   outline-offset: 2px;
+  box-shadow: 0 0 0 2px var(--bg);
 }

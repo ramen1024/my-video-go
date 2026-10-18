@@ -234,6 +234,52 @@ if (!/constants\.IPCacheTTLSecs/.test(cacheTTLDecl[1])) {
   );
 }
 
+// ---------- 3c. 预涂底色：theme.css / index.html，两处必须一致 ----------
+
+// 首帧防闪屏的内联样式与 meta theme-color 只能硬编码颜色（CSS 变量那时还没生效），
+// 因此底色在 theme.css 之外还有两份字面量。三者漂移的症状是**启动瞬间闪一下**
+// 旧底色，或者在手机上地址栏出现一条与原背景不同的色带——都很轻微，没人会
+// 为它开 issue，但每次启动都看得见。
+const themeCss = readFileSync(join(root, "frontend/src/lib/styles/theme.css"), "utf8");
+const bgMatch = themeCss.match(/--bg:\s*(#[0-9a-fA-F]{6})\s*;/);
+if (!bgMatch) fail("frontend/src/lib/styles/theme.css 中找不到 --bg 的十六进制定义");
+const bgHex = bgMatch[1].toLowerCase();
+
+const indexHtml = readFileSync(join(root, "frontend/index.html"), "utf8");
+const themeColorMatch = indexHtml.match(/<meta\s+name="theme-color"\s+content="(#[0-9a-fA-F]{6})"/);
+if (!themeColorMatch) fail("frontend/index.html 中找不到 meta theme-color");
+if (themeColorMatch[1].toLowerCase() !== bgHex) {
+  fail(
+    `index.html 的 theme-color(${themeColorMatch[1]}) 与 theme.css 的 --bg(${bgHex}) 不一致`,
+  );
+}
+
+const prepaintMatch = indexHtml.match(/background:\s*(#[0-9a-fA-F]{6})\s*;/);
+if (!prepaintMatch) fail("frontend/index.html 中找不到预涂底色的内联 background");
+if (prepaintMatch[1].toLowerCase() !== bgHex) {
+  fail(
+    `index.html 预涂底色(${prepaintMatch[1]}) 与 theme.css 的 --bg(${bgHex}) 不一致` +
+      "（首帧会闪一下旧色）",
+  );
+}
+
+// main.go 的 BackgroundColour 是第三份：Wails 窗口在 HTML 到达之前就显示了，
+// 它决定那一刻的颜色，所以不能与 CSS 分叉。
+const mainGo = readFileSync(join(root, "main.go"), "utf8");
+const bgColourMatch = mainGo.match(
+  /BackgroundColour:\s*&options\.RGBA\{R:\s*(0x[0-9a-fA-F]+),\s*G:\s*(0x[0-9a-fA-F]+),\s*B:\s*(0x[0-9a-fA-F]+)/,
+);
+if (!bgColourMatch) fail("main.go 中找不到 BackgroundColour 的 RGBA 定义");
+const goBgHex = `#${[bgColourMatch[1], bgColourMatch[2], bgColourMatch[3]]
+  .map((v) => Number(v).toString(16).padStart(2, "0"))
+  .join("")}`;
+if (goBgHex.toLowerCase() !== bgHex) {
+  fail(
+    `main.go 的 BackgroundColour(${goBgHex}) 与 theme.css 的 --bg(${bgHex}) 不一致` +
+      "（窗口在 HTML 到达前就显示了，分叉会在启动瞬间闪一下）",
+  );
+}
+
 // ---------- 4. 版本号：wails.json / frontend/package.json / CHANGELOG 三处一致 ----------
 
 // 产品版本写在两个 JSON 里（wails.json 的 productVersion 进 exe 版本资源，
@@ -271,5 +317,5 @@ if (changelogVersion !== productVersion) {
 console.log(
   `✓ 配置一致性校验通过：INLINE(${inlineExts.length}) ⊆ VIDEO_TYPES(${videoExts.length})，` +
     `绑定方法 ${goBindings.size} 个两侧一致，端口/体积常量与 docs/api.md 复述一致，` +
-    `IP 缓存 TTL 单一来源，版本号 v${productVersion} 三处一致`,
+    `IP 缓存 TTL 单一来源，预涂底色 ${bgHex} 三处一致，版本号 v${productVersion} 三处一致`,
 );

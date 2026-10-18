@@ -2,7 +2,12 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <!--
+      允许缩放：此前写了 user-scalable=no，与 SPA 的 index.html 不一致。
+      输 4 位密码时想放大看清是合理需求，禁止缩放对低视力用户是硬障碍
+      （WCAG 1.4.4 要求内容可缩放到 200%）。
+    -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="icon" type="image/png" href="/favicon.png">
     <title>视频扫描器 - 密码验证</title>
     <style>
@@ -313,6 +318,21 @@
             .pin-box { width: 48px; height: 56px; font-size: 22px; }
             .num-btn { height: 50px; font-size: 18px; }
             .numpad { gap: 8px; }
+        }
+
+        /*
+          系统开启"减弱动态效果"时停掉三处动效：
+          - shake：密码错误已由红色边框表达，抖动只是增强
+          - dotBounce：验证中的点跳动
+          - banner 的位移动画保留淡入即可
+          全部旋/抖型动画都是前庭敏感用户的常见诱因。
+        */
+        @media (prefers-reduced-motion: reduce) {
+            .pin-box.error { animation: none; }
+            .loading-dot { animation: none; opacity: 0.7; }
+            .banner { transform: none; }
+            .numpad-overlay,
+            .success-overlay { transition: opacity 0.01s; }
         }
     </style>
 </head>
