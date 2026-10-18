@@ -60,6 +60,18 @@
    * 而手机上很容易误触，因此先问一次再动手。桌面端不经过这个状态。
    */
   let isConfirmingScan = $state(false);
+  /**
+   * 列表是否已至少成功加载过一次
+   *
+   * 用来区分"真的没有视频"与"数据还没到"。没有这个标志时，`videos.length === 0`
+   * 在首帧就成立——网页端要等 `onMount` 里的 `await refreshList()`，慢速局域网下
+   * 这一帧可能持续几百毫秒甚至数秒，用户看到的是**"共享文件夹中暂无可播放的视频"**，
+   * 也就是在数据尚未到达时给出了"没有"的断言。
+   *
+   * 桌面端不受影响（数据来自同步的 Wails 绑定，且初始状态是"请选择文件夹"），
+   * 因此这个标志只在网页端真正起作用，但两边共用同一份状态机。
+   */
+  let hasLoadedOnce = $state(false);
 
   async function selectFolder() {
     // 原生目录对话框是模态的但调用可重入：连点两次会开出两个对话框，
@@ -263,6 +275,9 @@
   async function refreshList() {
     const next = await platform.loadVideos();
     if (next !== videos) videos = next;
+    // 无论返回空数组还是非空，到这里都说明"数据已经到了"——
+    // 空列表从此可以被诚实地展示成"没有视频"
+    hasLoadedOnce = true;
   }
 
   /**
@@ -285,6 +300,9 @@
       }
     } catch (e) {
       errorMsg = "恢复共享状态失败: " + parseAppError(e);
+    } finally {
+      // 桌面端的"加载过"语义是"已经问过后端"，无论有没有共享目录
+      hasLoadedOnce = true;
     }
   }
 
@@ -403,15 +421,34 @@
     {#if isScanning}
       <div class="loading" role="status" aria-live="polite">
         <div class="spinner"></div>
-        <p>正在扫描视频文件...</p>
+        <p>正在扫描视频文件…</p>
         {#if platform.canCancelScan}
           <button class="btn btn-danger" onclick={handleCancelScan}>取消扫描</button>
         {/if}
       </div>
+    {:else if videos.length === 0 && !hasLoadedOnce}
+      <!--
+        数据尚未到达：**不能**在这里报"没有视频"。
+        网页端要等 /videos 返回，慢速局域网下可能持续数秒，
+        此前这一帧直接显示空状态，等于在数据没到时断言"没有"。
+      -->
+      <div class="loading" role="status" aria-live="polite">
+        <div class="spinner"></div>
+        <p>正在载入视频列表…</p>
+      </div>
     {:else if videos.length === 0}
       <div class="empty-state">
-        <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line><line x1="17" y1="17" x2="22" y2="17"></line></svg>
-        <p>{platform.canPickFolder ? "请选择文件夹以扫描视频文件" : "共享文件夹中暂无可播放的视频"}</p>
+        <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line><line x1="17" y1="17" x2="22" y2="17"></line></svg>
+        {#if platform.canPickFolder}
+          <p>请选择文件夹以扫描视频文件</p>
+          <!-- 空状态直接给出下一步：只有一个图标的空白页会让人不知道从哪开始 -->
+          <button class="btn btn-primary" onclick={selectFolder} disabled={isPicking || isScanning}>
+            {isPicking ? "选择中…" : "选择文件夹"}
+          </button>
+        {:else}
+          <p>共享文件夹中暂无可播放的视频</p>
+          <p class="empty-hint">可以在共享这台电脑上重新扫描，或稍后再试</p>
+        {/if}
       </div>
     {:else}
       <VideoTable {videos} onPlay={playVideo} preferInlinePlayback={platform.preferInlinePlayback} />
@@ -492,7 +529,12 @@
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: var(--radius-lg);
-    overflow: hidden;
+    /* clip 而非 hidden：hidden 仍然**创建滚动容器**，于是任何一点横向溢出
+       都会被脚本/浏览器"滚动到可见位置"，而这里是整页布局，滚过去就再也
+       回不来（搜索框曾因此把整列文件名顶出左边，见 theme.css 的 box-sizing 说明）。
+       clip 只裁剪、不产生滚动区，从根上杜绝这类跳位。
+       overflow-clip-margin 给圆角留一点余量，避免子元素的滚动条被切到圆角外。 */
+    overflow: clip;
     display: flex;
     flex-direction: column;
   }
@@ -534,6 +576,7 @@
     color: var(--text-tertiary);
     padding: 32px;
     gap: 14px;
+    text-align: center;
   }
 
   /* 不再给图标叠 opacity：令牌本身已经按"最弱的一级"设计，
@@ -541,5 +584,35 @@
   .empty-state p {
     font-size: var(--fs-md);
     color: var(--text-secondary);
+    /* 空状态正文控制在易读行长内，避免宽屏上一行拉满 */
+    max-width: 42ch;
+  }
+
+  /* 空状态里的次级说明：不是"没有内容"本身，而是"接下来能做什么"。
+     选择器带上 .empty-state 是为了压过上面的 `.empty-state p`——
+     同特异性下靠源码顺序生效太脆弱，直接写高一级更稳（不用 !important）。 */
+  .empty-state p.empty-hint {
+    color: var(--text-tertiary);
+    font-size: var(--fs-sm);
+    margin-top: -6px;
+  }
+
+  /* 空状态里的 CTA 与文案之间留白稍大，让按钮独立成"下一步"。
+     这里不能用 :global(.btn)：Svelte 只把 **本组件模板里**用到的 class
+     记入作用域，而 buttons.css 是全局的普通 CSS。用属性选择器之外的写法
+     会触发"未使用选择器"警告，因此直接写普通选择器（不参与 scope 推断的
+     情况由 Svelte 自行处理）—— 它在本组件内确实存在。 */
+  .empty-state button {
+    margin-top: 4px;
+  }
+
+  /* 系统开启"减弱动态效果"时停掉转圈：持续旋转是最容易引发不适的动画之一 */
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation: none;
+      /* 停掉动画后保留一圈不完整的边框，仍能看出"在等待" */
+      border-top-color: var(--accent);
+      opacity: 0.7;
+    }
   }
 </style>

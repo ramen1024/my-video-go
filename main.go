@@ -61,7 +61,7 @@ func main() {
 		Height:           700,
 		MinWidth:         800,
 		MinHeight:        500,
-		BackgroundColour: &options.RGBA{R: 0x0f, G: 0x17, B: 0x2a, A: 255}, // theme.css 的 --bg，防首帧闪白
+		BackgroundColour: &options.RGBA{R: 0x07, G: 0x0b, B: 0x14, A: 255}, // theme.css 的 --bg，防首帧闪白
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 			// 桌面端 CSP：Wails v2 没有 CSP 配置项，只能靠中间件注入。

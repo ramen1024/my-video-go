@@ -5,12 +5,12 @@
     <link rel="icon" type="image/png" href="/favicon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- 手机浏览器地址栏的配色：与 --bg 一致，避免顶部一条突兀的亮色 -->
-    <meta name="theme-color" content="#0f172a" />
+    <meta name="theme-color" content="#070b14" />
     <title>视频扫描器</title>
     <!--
       预涂底色：防止 theme.css 加载完成前首帧闪白。
       这是"禁止硬编码颜色"规则的有意例外（与原版 app.html 相同的做法），
-      底色必须与 src/lib/styles/theme.css 的 --bg (#0f172a) 保持一致，改主题需同步。
+      底色必须与 src/lib/styles/theme.css 的 --bg (#070b14) 保持一致，改主题需同步。
       网页端 CSP 的 style-src 'unsafe-inline' 放行这段内联样式。
       字体栈与基准字号不在这里写——由 theme.css 的 body 规则统一提供，
       登录页注入的是同一份，两处各写一套必然漂移。
@@ -19,7 +19,7 @@
       html,
       body {
         margin: 0;
-        background: #0f172a;
+        background: #070b14;
         color: #fff;
         /* 高度锁在**实际可视高度**上（dvh 而非 vh）：手机上地址栏收起会改变
            可视高度，用 vh 会算大，而下面的 overflow: hidden 让超出的部分

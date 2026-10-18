@@ -82,10 +82,15 @@
    * 行高
    *
    * 桌面端是单行（48px，与 13px 正文相称）；窄屏是两行卡片
-   * （文件名一行 + "大小 · 日期"一行），48px 装不下会上下叠住。
+   * （文件名最多两行 + "大小 · 日期"一行），48px 装不下会上下叠住。
+   *
+   * 窄屏给到 84px 是为了**两行文件名**：触屏没有 hover，`title` 基本不出现，
+   * 一旦截成一行，长名字就再没有第二次机会看到全文（曾经只能靠悬停）。
+   * 行高必须与下面的 CSS 完全一致——虚拟列表按这个值算每行的位置与总高度，
+   * 对不上就会互相叠住或留下空隙。
    */
   const ROW_HEIGHT_DESKTOP = 48;
-  const ROW_HEIGHT_NARROW = 68;
+  const ROW_HEIGHT_NARROW = 84;
 
   let isNarrow = $state(false);
   let rowHeight = $derived(isNarrow ? ROW_HEIGHT_NARROW : ROW_HEIGHT_DESKTOP);
@@ -214,7 +219,7 @@
     </button>
     <div class="search-box">
       <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
-      <input type="text" placeholder="搜索视频..." value={searchTerm} oninput={handleSearchInput} aria-label="搜索视频" />
+      <input type="text" placeholder="搜索视频…" value={searchTerm} oninput={handleSearchInput} aria-label="搜索视频" />
     </div>
   </div>
 </div>
@@ -288,8 +293,16 @@
               </div>
               <div class="col-action" role="cell">
                 {#if preferInlinePlayback(video)}
+                  <!--
+                    按钮的可点击热区是 44x44（触控标准），但**视觉**只有 30px：
+                    用 padding 撑开热区、用内部圆形承载外观，二者互不牵制。
+                    串行排列的实心蓝圆在深色列表里是最抢眼的元素，
+                    用户第一眼看到的是"一排蓝点"而不是文件名——层级是反的。
+                  -->
                   <button class="play-btn" onclick={(e) => { e.stopPropagation(); onPlay(video); }} onkeydown={(e) => e.stopPropagation()} aria-label="播放 {video.name}">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    <span class="play-btn-disc">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    </span>
                   </button>
                 {:else}
                   <button class="system-btn" onclick={(e) => { e.stopPropagation(); onPlay(video); }} onkeydown={(e) => e.stopPropagation()} aria-label="用系统播放器打开 {video.name}">打开</button>
@@ -321,13 +334,20 @@
     font-weight: 500;
     /* 数字等宽：轮询刷新时数量变化不会让这一行左右跳动 */
     font-variant-numeric: tabular-nums;
+    /* 计数可以收缩（超窄屏让位给操作区），但不换行 */
+    min-width: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .toolbar-actions {
     display: flex;
     align-items: center;
     gap: 8px;
-    flex: 0 0 auto;
+    /* 不再 flex: 0 0 auto 写死：搜索框要有弹性，见下面的 .search-box */
+    flex: 0 1 auto;
+    min-width: 0;
   }
 
   /* 窄屏排序按钮：桌面端隐藏（那边用表头排序，功能等价且更直观） */
@@ -353,8 +373,12 @@
   }
 
   .search-box {
-    flex: 0 0 auto;
-    width: 220px;
+    /* 弹性宽度：窗口窄时收缩、宽时最多 320px。
+       原来写死 220px 且顶到最右，与左侧的计数隔了整整一个屏幕宽的空白。
+       这里的 width 是**外框**宽（theme.css 已全局 box-sizing: border-box），
+       所以下面 input 的 width:100% 加上 padding/border 也不会撑破父容器。 */
+    flex: 0 1 auto;
+    width: clamp(180px, 24vw, 320px);
     position: relative;
   }
 
@@ -549,22 +573,63 @@
     flex-shrink: 0;
   }
 
+  /**
+   * 播放按钮
+   *
+   * 视觉是**幽灵态**（低对比描边 + 中性色三角），整行 hover / 键盘聚焦时
+   * 才转为主色实心。理由：这是个内容浏览界面，文件名才是主体；
+   * 此前的实心蓝圆在最亮、饱和度最高的位置，把视线从内容上拽走了。
+   *
+   * 热区 44x44（WCAG 2.2 / Material 触控建议），视觉圆盘 30px —— 两者分离，
+   * 于是既满足触控，又不会让按钮在版面上显得笨重。
+   */
   .play-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    /* 负边距把多出来的热区收回去，避免它顶高行或吃掉右内边距 */
+    margin: -7px -7px -7px 0;
+  }
+
+  .play-btn-disc {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     width: 30px;
     height: 30px;
-    background: var(--accent-strong);
-    border: none;
     border-radius: 50%;
-    color: var(--white);
-    cursor: pointer;
-    transition: background-color 0.15s ease;
+    border: 1px solid var(--border-strong);
+    background: var(--surface-hover);
+    color: var(--text-secondary);
+    /* 三角在视觉上偏左，往右挪 1px 看起来才是居中的 */
+    padding-left: 1px;
+    transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
   }
 
-  .play-btn:hover {
+  .table-row:hover .play-btn-disc {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+    color: var(--white);
+  }
+
+  .play-btn:hover .play-btn-disc {
     background: var(--accent);
+    border-color: var(--accent);
+    color: var(--white);
+  }
+
+  /* 键盘聚焦时也要给到同样的强调：只在 :hover 里变色的话，
+     Tab 过去的用户看不到正在操作哪一行 */
+  .play-btn:focus-visible .play-btn-disc {
+    background: var(--accent-strong);
+    border-color: var(--accent-strong);
+    color: var(--white);
   }
 
   .system-btn {
@@ -641,11 +706,13 @@
     }
 
     /* 整行改 flex-wrap：col-name 占满第一行，其余三项落在第二行。
-       不能用 grid —— col-size 与 col-date 会落进同一个单元格互相叠住。 */
+       不能用 grid —— col-size 与 col-date 会落进同一个单元格互相叠住。
+       高度由 JS 的 ROW_HEIGHT_NARROW 给定，这里的 padding 只做内衬。 */
     .table-row {
       display: flex;
       flex-wrap: wrap;
       align-items: center;
+      align-content: center;
       padding: 8px 0;
     }
 
@@ -653,9 +720,34 @@
       padding: 0 12px;
     }
 
+    /* 文件名最多两行：触屏没有 hover，title 不作为查看全文的途径，
+       因此把可展示的行数从 1 提到 2（配合 ROW_HEIGHT_NARROW = 84）。
+       超过两行仍省略——行高是虚拟列表算好的固定值，不能随内容增长。 */
     .col-name {
       flex: 1 1 100%;
       min-width: 0;
+      /* align-items: baseline 在换行时会按最后一行对齐，
+         这里改为顶对齐，两行名字与扩展名徽章的关系才稳定 */
+      align-items: flex-start;
+    }
+
+    .video-name {
+      /* 两行截断，但**不用** -webkit-line-clamp：
+         `.video-name` 是 `.col-name`（flex 容器）的子项，Chromium 会把
+         `display: -webkit-box` 块化成 flow-root，line-clamp 随之失效
+         （实测 computed display 就是 flow-root，只剩硬裁，且不带省略号）。
+         这里直接按两行的高度上限裁剪：行高 1.35 × 2 = 2.7em。
+         结果同样是"两行 + 省略号"的观感，且不依赖会被块化掉的 display。 */
+      white-space: normal;
+      line-height: 1.35;
+      max-height: 2.7em;
+      overflow: hidden;
+      /* 截断处的省略号：单行 text-overflow 对多行无效，
+         改由行尾的渐变淡出提示"还有内容"——比硬切口更像被处理过 */
+      mask-image: linear-gradient(to bottom, #000 1.6em, transparent 2.7em);
+      -webkit-mask-image: linear-gradient(to bottom, #000 1.6em, transparent 2.7em);
+      /* 与首行文字对齐，而不是被拉到整块中间 */
+      align-self: flex-start;
     }
 
     /* 第二行：大小 → 日期 →（靠右）操作 */

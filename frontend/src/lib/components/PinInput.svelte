@@ -121,16 +121,19 @@
     gap: 10px;
   }
 
+  /* 与登录页（internal/share/login.html 的 .pin-box）同一档几何：
+     同一个人在两处看到的是同一套密码输入控件，尺寸不该分叉。
+     登录页是 56x64，这里此前 42x52 —— 被共享方（手机）看到的反而更大。 */
   .pin-box {
-    width: 42px;
-    height: 52px;
+    width: 52px;
+    height: 60px;
     border-radius: var(--radius-md);
     background: var(--surface-hover);
     border: 1.5px solid var(--border-strong);
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 22px;
+    font-size: var(--fs-digit);
     font-weight: 700;
     color: transparent;
     transition: border-color 0.15s ease, background-color 0.15s ease, color 0.15s ease;
@@ -170,7 +173,7 @@
     text-align: center;
     padding: 6px 12px;
     border-radius: var(--radius-sm);
-    font-size: 12px;
+    font-size: var(--fs-caption);
     font-weight: 500;
   }
 
@@ -204,12 +207,15 @@
   }
 
   .num-key {
-    height: 46px;
+    /* 48px：触控目标的可及尺寸（Material 建议 48，Apple 44）。
+       此前 46px 比登录页的 56px 还小 —— 同一个交互，被共享方（手机）
+       看到的反而更大，设置方（桌面）反而更小，是反的。 */
+    height: 48px;
     border: 1px solid var(--border-strong);
     border-radius: var(--radius-md);
     background: var(--surface-hover);
     color: var(--text-strong);
-    font-size: 18px;
+    font-size: var(--fs-xl);
     font-weight: 500;
     cursor: pointer;
     transition: background-color 0.12s ease, border-color 0.12s ease;
@@ -226,12 +232,12 @@
   }
 
   .num-key.action {
-    font-size: 13px;
+    font-size: var(--fs-md);
     color: var(--text-tertiary);
   }
 
   .num-key.delete {
-    font-size: 16px;
+    font-size: var(--fs-xl);
     color: var(--text-secondary);
   }
 
@@ -239,5 +245,13 @@
     background: var(--danger-soft);
     border-color: var(--danger-border);
     color: var(--danger);
+  }
+
+  /* 系统开启"减弱动态效果"时不做抖动动画：密码错误已由红色边框表达，
+     抖动是增强而非必要信息 */
+  @media (prefers-reduced-motion: reduce) {
+    .pin-box.error {
+      animation: none;
+    }
   }
 </style>

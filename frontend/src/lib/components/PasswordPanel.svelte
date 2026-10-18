@@ -204,14 +204,14 @@
   }
 
   .panel-title {
-    font-size: 14px;
+    font-size: var(--fs-lg);
     font-weight: 600;
     color: var(--text-strong);
   }
 
   .toggle-btn {
     padding: 5px 12px;
-    font-size: 12px;
+    font-size: var(--fs-caption);
     font-weight: 600;
     border-radius: 20px;
     cursor: pointer;
@@ -239,7 +239,7 @@
   }
 
   .pwd-digit {
-    font-size: 22px;
+    font-size: var(--fs-digit);
     font-weight: 700;
     color: var(--accent-light);
     width: 42px;
@@ -261,7 +261,7 @@
 
   .action-btn {
     padding: 6px 12px;
-    font-size: 12px;
+    font-size: var(--fs-caption);
     font-weight: 500;
     cursor: pointer;
     border-radius: var(--radius-sm);
@@ -303,7 +303,7 @@
   }
 
   .setup-hint {
-    font-size: 12px;
+    font-size: var(--fs-caption);
     color: var(--text-tertiary);
   }
 </style>

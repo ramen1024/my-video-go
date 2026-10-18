@@ -30,9 +30,43 @@
   background: var(--surface-pressed);
 }
 
+/**
+ * 禁用态
+ *
+ * 不用 `opacity: .45` 整体压暗：那会把**文字**一起压到 2.45:1，
+ * 禁用按钮看起来像坏掉了（尤其是主按钮）。改成降饱和 + 保留文字明度，
+ * 让"不可点"由颜色语义表达，而不是由"看不清"表达。
+ *
+ * 每个变体单独给禁用配色，是因为压暗的对象不同：
+ * 实心按钮压背景、描边按钮压边框。
+ */
 .btn:disabled {
-  opacity: 0.45;
   cursor: not-allowed;
+  /* 关掉 hover/active 的过渡：禁用元素不该有动效反馈 */
+  transition: none;
+}
+
+.btn:disabled:not(.btn-primary):not(.btn-share):not(.btn-danger) {
+  background: var(--surface-hover);
+  border-color: var(--border);
+  color: var(--text-tertiary);
+}
+
+.btn-primary:disabled {
+  background: var(--accent-deep);
+  /* 白字保持在 accent-deep(#1d4ed8) 上 5.9:1 左右，可读 */
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.btn-share:disabled {
+  background: var(--share-active);
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.btn-danger:disabled {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-tertiary);
 }
 
 /* 主要操作按钮 */

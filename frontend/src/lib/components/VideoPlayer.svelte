@@ -218,7 +218,7 @@
   }
 
   .player-title {
-    font-size: 14px;
+    font-size: var(--fs-lg);
     font-weight: 500;
     color: var(--text);
     overflow: hidden;
