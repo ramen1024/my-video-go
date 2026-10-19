@@ -7,10 +7,19 @@
 - **不上传任何数据**：扫描、播放、共享全部只发生在你的电脑和局域网内，不连接任何外部服务器
 - 界面为深色主题，上万条视频依然流畅
 
-<!-- TODO: 补充截图（建议两张：桌面端主界面/播放、手机扫码后的网页端）。
-     截图存入 docs/ 后按下面的格式插入：
-     ![桌面端主界面](docs/screenshot-desktop.png)
-     ![手机网页端](docs/screenshot-mobile.png) -->
+![桌面端主界面：视频列表与工具栏](docs/screenshot-desktop.png)
+
+| 局域网共享面板 | 手机网页端 |
+|:---:|:---:|
+| ![共享面板：二维码、访问地址与访问密码设置](docs/screenshot-share.png) | ![手机端：同一份列表，按文件名排序](docs/screenshot-mobile.png) |
+
+| 网页端内联播放 | 4 位数字密码登录页 |
+|:---:|:---:|
+| ![网页端播放《Big Buck Bunny》：应用内直接播放，可拖动进度条](docs/screenshot-player.jpg) | ![登录页：4 位数字键盘](docs/screenshot-login.png) |
+
+> 截图中的四个视频都是 **Blender 开放电影计划**等渠道的 CC 授权短片
+> （Big Buck Bunny、Sintel、Jellyfish、Flower），共享地址为示例值，
+> 与真实网络环境无关。
 
 ## 下载
 
