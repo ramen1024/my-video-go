@@ -22,6 +22,7 @@ import (
 	"net"
 	"net/http"
 	"strconv"
+	"sync"
 )
 
 // Server 是一台共享服务器实例。可以只构造不 Start（测试与工具代码
@@ -31,10 +32,19 @@ type Server struct {
 	pw     *password.Manager
 	assets fs.FS // 已定位到 frontend/dist 子目录
 
-	ips  []string
-	port int
-	ln   net.Listener
-	srv  *http.Server
+	// stateMu 保护下面三个"监听态"字段。
+	//
+	// 它们此前是裸字段：Start 写、Stop 读并清空。生产路径上 Stop 可由两条
+	// 独立入口同时进入——绑定给前端的 StopShareServer（经状态机）与应用退出时的
+	// App.shutdown（直接调 Stop）。`go test -race` 的探针稳定复现
+	// "read at server.go:134 / write at server.go:113"。
+	// 状态机只串行化了第一条入口，第二条在 shutdown 里绕过了它，因此这里必须
+	// 自己保证并发安全（顺序：先取 stateMu，再调用 Shutdown，避免持锁等待 I/O）。
+	stateMu sync.Mutex
+	ips     []string
+	port    int
+	ln      net.Listener
+	srv     *http.Server
 }
 
 func New(st *state.AppState, pw *password.Manager, assets fs.FS) *Server {
@@ -51,6 +61,11 @@ func New(st *state.AppState, pw *password.Manager, assets fs.FS) *Server {
 // 监听结果只在成功后才提交到实例字段：若沿用上次运行残留的 listener 字段
 // 判断成败，"本次全部端口绑定失败"会被误判为成功（假 listener、旧端口、
 // 实际无人监听）。重复 Start 前必须先 Stop（由 AppState 状态机保证）。
+//
+// 与 Stop 的关系：两者**不设计**为并发调用（状态机串行化，退出时的 shutdown
+// 也在应用生命周期的末尾）。stateMu 只保证字段访问没有数据竞争；如果真让
+// Start 与 Stop 重叠，语义是未定义的（Stop 可能看不到 Start 刚提交的 listener），
+// 这是有意不处理的——用锁去"修复"一个本不该发生的时间窗只会掩盖状态机被绕过。
 func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 	// 端口合法性必须先拦：port 为负时 net.Listen 会退化成绑随机端口（0），
 	// 静默变成"绑到任意端口"；port > 65535 则一个候选都试不到，
@@ -107,10 +122,15 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 		ReadHeaderTimeout: constants.HTTPReadHeaderTimeout,
 		IdleTimeout:       constants.HTTPIdleTimeout,
 	}
+
+	// 提交监听态：与 Stop 的"读取并清空"同锁，避免出现
+	// "Stop 已判定 srv==nil 返回，紧接着 Start 又把 srv 写回来"的窗口。
+	s.stateMu.Lock()
 	s.ips = ips
 	s.ln = ln
 	s.port = listenPort
 	s.srv = srv
+	s.stateMu.Unlock()
 
 	// 必须把 srv/ln 捕获成局部变量再进 goroutine：Stop 会把 s.srv/s.ln 置 nil，
 	// 而本 goroutine 未必已被调度——直接读字段会在 Serve 里对 nil 接收者解引用
@@ -122,7 +142,7 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 		}
 	}()
 
-	return &models.ShareServerInfo{IPs: s.ips, Port: s.port}, nil
+	return &models.ShareServerInfo{IPs: ips, Port: listenPort}, nil
 }
 
 // Stop 优雅停止：等待在途请求排空，总超时 constants.ServerStopTimeout。
@@ -130,15 +150,24 @@ func (s *Server) Start(port int) (*models.ShareServerInfo, error) {
 //
 // 排空超时时**强制**关闭剩余连接：否则调用方会以为"已停止"、状态机也回到
 // Stopped，而旧连接仍在被服务，紧接着的 Start 还能在同一端口上叠一个服务器。
+//
+// 并发安全：`App.shutdown` 与应用内的 StopShareServer 都可能调用本方法，
+// 前者不经过状态机，因此这里必须自己串行化。锁只覆盖"取出/清空字段"这一段，
+// Shutdown 与 Close 在锁外执行（它们会等待在途请求，最长 5 秒；持锁等待会让
+// 紧接着的 Start 卡住）。两个并发调用中，后到者拿到 nil 直接返回，与幂等的
+// 语义一致。
 func (s *Server) Stop() error {
-	if s.srv == nil {
-		return nil
-	}
+	s.stateMu.Lock()
 	srv := s.srv
 	// 先清空实例字段再等待：即便下面排空超时，实例也已回到"未启动"状态
 	s.srv = nil
 	s.ln = nil
 	s.port = 0
+	s.stateMu.Unlock()
+
+	if srv == nil {
+		return nil
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), constants.ServerStopTimeout)
 	defer cancel()
@@ -158,7 +187,14 @@ func (s *Server) Stop() error {
 // 此时只有 localhost/127.0.0.1/::1 能过 Host 校验。
 //
 // 桌面端内联播放不复用本 Handler：它走 internal/player 的独立回环服务器。
-func (s *Server) Handler() http.Handler { return s.buildHandler(s.ips) }
+func (s *Server) Handler() http.Handler {
+	// ips 与 Start/Stop 共用一个锁：测试与工具代码可能在 Start 之后仍拿
+	// Handler() 发请求，直接把字段读出去会与 Stop 的清空竞争。
+	s.stateMu.Lock()
+	ips := s.ips
+	s.stateMu.Unlock()
+	return s.buildHandler(ips)
+}
 
 // buildHandler 组装完整请求处理链：安全头 → Host 校验（防 DNS rebinding）→
 // 会话鉴权 → 路由。
@@ -177,8 +213,16 @@ func (s *Server) buildHandler(ips []string) http.Handler {
 	mux.Handle("GET /video/", VideoHandler{State: s.st})
 	mux.HandleFunc("GET /", s.handleIndex)
 
+	// 中间件顺序（由外到内）：安全头 → 压缩 → Host 校验 → CSRF → 鉴权 → 路由。
+	//
+	// CSRF 必须在鉴权**之前**：未启用密码时 withAuth 直接放行，跨站 POST 会
+	// 一路打到 /refresh（修复前实测返回 202 并真的开始全盘扫描）。
+	// 放在 withHostCheck **之内**：Host 校验先挡掉 DNS rebinding，剩下的才是
+	// "浏览器带着真实 Host、但来源页是恶意站点"这一种形态，正是
+	// Sec-Fetch-Site / Origin 能识别的。
 	var h http.Handler = mux
 	h = withAuth(s.st, s.pw, h)
+	h = withCSRFGuard(h)
 	h = withHostCheck(ips, h)
 	h = withGzip(h)
 	h = withSecurityHeaders(h)

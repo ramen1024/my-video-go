@@ -26,8 +26,14 @@ func injectNonce(html, nonce string) string {
 	return strings.ReplaceAll(html, "<script>", `<script nonce="`+nonce+`">`)
 }
 
+// handleLogin 返回登录页。
+//
+// 两种情况下直接跳回 /：会话有效（已登录），或**密码保护未启用**。
+// 后一种是修复前缺失的分支：保护关掉时 withAuth 全放行，但 /login 仍然渲染
+// 一个永远登录不成功的页面（/auth 返回"未设置密码"）。用户只要收藏/刷新过
+// 登录页，看到的就是一个输入正确密码也进不去的界面，且没有任何说明。
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if s.pw.CheckWebAuth(r.Header.Get("Cookie")) {
+	if !s.pw.Enabled() || s.pw.CheckWebAuth(r.Header.Get("Cookie")) {
 		http.Redirect(w, r, "/", http.StatusFound)
 		return
 	}

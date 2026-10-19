@@ -357,3 +357,37 @@ func TestScanJunctionRootRelativePathsAreUsable(t *testing.T) {
 		t.Fatalf("relative_path 不得含 .. 或为绝对路径: %q", res.Videos[0].RelativePath)
 	}
 }
+
+// 扩展长度 / 设备前缀形式的 **UNC 共享根** 也必须被拦下。
+//
+// 修复前 `\\?\UNC\server\share` 被剥成 `UNC\server\share` 后既不匹配 `\\`
+// 分支、也不含盘符，于是一路 return false —— 用户把整个网络共享选进来时
+// 会真的遍历整个共享（正是这条守卫要防的"卡死"）。
+// 反斜杠用字节构造，避免 shell/编辑器转义差异把用例写成另一个路径。
+func TestIsRootDirectoryExtendedUNC(t *testing.T) {
+	bs := string([]byte{92}) // 一个反斜杠
+	roots := []string{
+		bs + bs + "?" + bs + "UNC" + bs + "server" + bs + "share",
+		bs + bs + "?" + bs + "UNC" + bs + "server" + bs + "share" + bs,
+		bs + bs + "." + bs + "UNC" + bs + "server" + bs + "share",
+		// 大小写不敏感（Windows 路径）
+		bs + bs + "?" + bs + "unc" + bs + "server" + bs + "share",
+	}
+	for _, p := range roots {
+		if !isRootDirectory(p) {
+			t.Errorf("应判定为根目录（整个网络共享）: %q", p)
+		}
+	}
+
+	notRoots := []string{
+		bs + bs + "?" + bs + "UNC" + bs + "server" + bs + "share" + bs + "sub",
+		bs + bs + "." + bs + "UNC" + bs + "server" + bs + "share" + bs + "sub" + bs + "deep",
+		// UNC 路径中间带 `..`：Clean 后是共享内子目录，不是根
+		bs + bs + "server" + bs + "share" + bs + "sub" + bs + ".." + bs + "sub",
+	}
+	for _, p := range notRoots {
+		if isRootDirectory(p) {
+			t.Errorf("不应判定为根目录: %q", p)
+		}
+	}
+}

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -129,5 +130,40 @@ func TestPlayerBindsLoopbackOnly(t *testing.T) {
 	addr := s.ln.Addr().String()
 	if !strings.HasPrefix(addr, "127.0.0.1:") {
 		t.Fatalf("必须只监听回环地址: %q", addr)
+	}
+}
+
+// Port() 与 Stop() 并发必须安全（-race 下无竞争）。
+//
+// 前端的 GetVideoServerPort 是随时可调的绑定方法，而 Stop 在应用退出时清空
+// 字段。修复前 ln/srv 是裸字段，Port 读 ln 与 Stop 写 ln 会构成数据竞争；
+// 现在统一在 mu 内访问，且 Stop 后 Port() 返回 0（前端据此走播放失败回退）。
+func TestPlayerPortConcurrentWithStop(t *testing.T) {
+	s, _, _ := newStartedServer(t)
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			if p := s.Port(); p < 0 {
+				t.Errorf("Port() 不应为负: %d", p)
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		if err := s.Stop(); err != nil {
+			t.Errorf("Stop 失败: %v", err)
+		}
+	}()
+	wg.Wait()
+
+	if p := s.Port(); p != 0 {
+		t.Fatalf("Stop 后 Port() 应为 0，实际 %d", p)
+	}
+	// 幂等：重复 Stop 不 panic、不报错
+	if err := s.Stop(); err != nil {
+		t.Fatalf("重复 Stop 应幂等: %v", err)
 	}
 }

@@ -223,10 +223,19 @@ func isRootDirectory(p string) bool {
 
 	norm := strings.ReplaceAll(p, "/", `\`)
 
-	// 设备/扩展长度前缀：剥掉后递归判断剩余部分
+	// 设备/扩展长度前缀：剥掉后递归判断剩余部分。
+	//
+	// `\\?\UNC\server\share` 这种写法剥完变成 `UNC\server\share`，既不以 `\\`
+	// 开头、也不含盘符，会一路落到最后 return false —— 于是"整个网络共享根"被
+	// 当成普通目录放行（正是本函数要拦的整盘扫描）。这里把 `UNC\` 等价还原成
+	// `\\` 再递归，让扩展长度写法和普通写法得到同一判定。
 	for _, prefix := range []string{`\\?\`, `\\.\`} {
 		if len(norm) > len(prefix) && strings.HasPrefix(norm, prefix) {
-			return isRootDirectory(norm[len(prefix):])
+			rest := norm[len(prefix):]
+			if len(rest) >= 4 && strings.EqualFold(rest[:4], `UNC\`) {
+				rest = `\\` + rest[4:]
+			}
+			return isRootDirectory(rest)
 		}
 	}
 

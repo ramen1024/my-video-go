@@ -946,3 +946,102 @@ func TestLoginTemplateAllowsZoom(t *testing.T) {
 		t.Fatalf("登录页 viewport 应保留 width=device-width，实际 %q", content)
 	}
 }
+
+// 并发调用 Stop 必须安全（-race 下必须无竞争）。
+//
+// 生产环境里 Stop 有**两条**入口：绑定给前端的 StopShareServer（经状态机）
+// 与应用退出时的 App.shutdown。修复前 shutdown 用 IsServerRunning() 判断后
+// 直接调 Stop，绕过了状态机；两个 goroutine 于是能同时进出 Stop，而
+// s.srv/s.ln/port 当时是裸字段。修复前的探针稳定复现：
+//
+//	WARNING: DATA RACE
+//	  share.(*Server).Stop()  server.go:134
+//	  share.(*Server).Start() server.go:113
+//
+// 现在字段访问统一在 stateMu 内，且 Stop 取出字段后立即清空——后到者拿到 nil
+// 直接返回，语义与幂等一致。
+func TestStopIsConcurrencySafe(t *testing.T) {
+	s, _ := newTestServer(t, false)
+	if _, err := s.Start(0); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := s.Stop(); err != nil {
+				t.Errorf("并发 Stop 不应报错: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+
+	// 停止后仍是干净状态，且可再次 Start
+	if _, err := s.Start(0); err != nil {
+		t.Fatalf("并发 Stop 后应能重新 Start: %v", err)
+	}
+	if err := s.Stop(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Stop 与 Handler() 并发：Handler 会读 s.ips（测试与工具代码的常用姿势），
+// 同样必须走锁，不能直接读字段。
+func TestHandlerConcurrentWithStop(t *testing.T) {
+	s, _ := newTestServer(t, false)
+	if _, err := s.Start(0); err != nil {
+		t.Fatal(err)
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 50; i++ {
+			h := s.Handler()
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest("GET", "/videos", nil))
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		_ = s.Stop()
+	}()
+	wg.Wait()
+}
+
+// 未启用密码保护时 /login 应直接跳回 /。
+//
+// 修复前 /login 只看"会话是否有效"：保护关掉时 withAuth 全放行，但登录页仍然
+// 渲染一个**永远登录不成功**的界面（/auth 返回"未设置密码"）。用户收藏或刷新过
+// 登录页后，看到的就是输入正确密码也进不去、且没有任何说明的页面。
+func TestLoginRedirectsWhenProtectionDisabled(t *testing.T) {
+	s, _ := newTestServer(t, false) // 未设密码、未启用
+	w := doReq(s, "GET", "/login", "", "", nil)
+	if w.Code != http.StatusFound {
+		t.Fatalf("未启用保护时 /login 应 302 回 /（而不是渲染登录页），实际 %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "/" {
+		t.Fatalf("重定向目标应为 /，实际 %q", loc)
+	}
+
+	// 两个别名都要一致
+	w = doReq(s, "GET", "/login.html", "", "", nil)
+	if w.Code != http.StatusFound || w.Header().Get("Location") != "/" {
+		t.Fatalf("/login.html 同样应 302 /: %d %q", w.Code, w.Header().Get("Location"))
+	}
+}
+
+// 启用保护后仍必须返回登录页（别把上面的修复做成"永远重定向"）。
+func TestLoginStillRendersWhenProtectionEnabled(t *testing.T) {
+	s, _ := newTestServer(t, true)
+	w := doReq(s, "GET", "/login", "", "", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("启用保护时 /login 应 200，实际 %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "nonce=") {
+		t.Fatal("登录页应含注入 nonce 的脚本")
+	}
+}

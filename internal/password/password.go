@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"my-video-go/internal/apperr"
 	"my-video-go/internal/constants"
 	"my-video-go/internal/models"
@@ -130,10 +131,23 @@ func (m *Manager) loadConfig() {
 	if cfg.PasswordHash != nil {
 		m.hash = *cfg.PasswordHash
 	}
-	m.enabled.Store(cfg.Enabled)
 	if cfg.Pepper != nil {
 		m.pepper = *cfg.Pepper
 	}
+
+	// 不变量：**没有密码就不能处于"保护已启用"状态**。
+	//
+	// 两个字段分别持久化，配置被手工改坏（`password_hash: null` + `enabled: true`）
+	// 或将来做字段迁移时都会出现这种组合。一旦出现，withAuth 会拦下所有请求，
+	// 而 /auth 又因为 m.hash == "" 永远返回"未设置密码"——网页端被**永久**锁死，
+	// 只有桌面端 UI 能把保护关回去。与其让用户去猜，不如在加载时自愈：
+	// 无哈希即视为未启用，并留一条 Warn（这是配置被外部改动的迹象）。
+	if m.hash == "" && cfg.Enabled {
+		slog.Warn("密码配置缺少密码哈希但标记为已启用，已按未启用处理（否则所有请求都会被拦下且无法登录）")
+		m.enabled.Store(false)
+		return
+	}
+	m.enabled.Store(cfg.Enabled)
 }
 
 // saveConfigLocked 要求持有 m.mu。
@@ -296,16 +310,20 @@ func (m *Manager) Authenticate(ip, password string) (string, error) {
 }
 
 // checkRateLimitLocked 返回剩余锁定秒数（0 表示未锁定）。要求持有 m.mu。
+//
+// 必须**向上取整**：锁定 30 秒、过了 29.2 秒时剩余 0.8 秒，截断成 0 会让调用方
+// （以 `> 0` 判断是否锁定）认为已解锁，于是提前放出一次尝试；同时登录页拿到
+// "请0秒后重试"也不会进入倒计时分支。ceil 后同一时刻返回 1，语义与倒计时一致。
 func (m *Manager) checkRateLimitLocked(ip string) int {
 	a, ok := m.failed[ip]
 	if !ok || a.lockedUntil.IsZero() {
 		return 0
 	}
-	remaining := int(time.Until(a.lockedUntil).Seconds())
+	remaining := math.Ceil(time.Until(a.lockedUntil).Seconds())
 	if remaining < 0 {
 		return 0
 	}
-	return remaining
+	return int(remaining)
 }
 
 // recordFailedAttemptLocked 记一次失败；达到 MaxFailedAttempts 时锁定

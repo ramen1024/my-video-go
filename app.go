@@ -13,6 +13,7 @@ import (
 	"my-video-go/internal/share"
 	"my-video-go/internal/state"
 	neturl "net/url"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -39,11 +40,20 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // shutdown 在应用退出时尽力停止共享与回环播放服务器，避免留下占用端口的残留进程。
+//
+// 共享服务器**必须走状态机**（StartServerStopping → Stop → SetServerStopped），
+// 与 StopShareServer 完全一致：此前这里是 `if IsServerRunning() { Stop() }`，
+// 直接调 Stop 绕过了状态机——若用户此刻正在点"停止共享"（已处于 Stopping），
+// 两个 goroutine 会同时进入 Stop，界面状态与实例状态也可能分叉。
+// 状态机本身会拒绝"已在 Stopping"的第二次转换，因此这里天然是幂等的。
 func (a *App) shutdown(ctx context.Context) {
-	if a.st.IsServerRunning() {
+	// 只在状态机允许时转换：Stopped/Stopping 都会返回错误，直接跳过即可
+	// （那种情况下服务器要么没在跑、要么另一个流程正在关它）。
+	if err := a.st.StartServerStopping(); err == nil {
 		if err := a.share.Stop(); err != nil {
 			slog.Warn("退出时停止共享服务器失败", "err", err)
 		}
+		a.st.SetServerStopped()
 	}
 	if err := a.player.Stop(); err != nil {
 		slog.Warn("退出时停止回环播放服务器失败", "err", err)
@@ -113,6 +123,12 @@ func (a *App) PlayVideo(relativePath string) error {
 	if !isSupportedVideoPath(abs) {
 		return apperr.InvalidPath("只能打开共享文件夹内的视频文件")
 	}
+	// 最后一道：必须是**普通文件**。扩展名白名单只看名字，而这里拿到的是解析
+	// 符号链接之后的目标——它可以是一个同名目录、命名管道或设备文件。
+	// 扫描器收录的都是普通文件，这条只拦手工构造的入参。
+	if !isRegularFile(abs) {
+		return apperr.InvalidPath("只能打开共享文件夹内的视频文件")
+	}
 	if err := openWithSystemPlayer(abs); err != nil {
 		return apperr.IoError("无法打开视频: %v", err)
 	}
@@ -125,6 +141,13 @@ func (a *App) PlayVideo(relativePath string) error {
 func isSupportedVideoPath(path string) bool {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(path), "."))
 	return constants.IsSupportedVideoExtension(ext)
+}
+
+// isRegularFile 判断路径是否是普通文件（不是目录、管道、设备或符号链接本身）。
+// 同样抽出来便于测试：它是 PlayVideo 在 ShellExecute 之前的最后一道检查。
+func isRegularFile(path string) bool {
+	fi, err := os.Stat(path) // Stat 跟随符号链接，看的正是即将交给系统播放器的那个对象
+	return err == nil && fi.Mode().IsRegular()
 }
 
 // ---- 局域网共享 ----
