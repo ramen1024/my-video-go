@@ -21,6 +21,7 @@ import (
 	"my-video-go/internal/state"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -28,7 +29,12 @@ import (
 const stopTimeout = 2 * time.Second
 
 type Server struct {
-	st  *state.AppState
+	st *state.AppState
+
+	// mu 保护 ln/srv：Port() 由前端随时经绑定方法调用（GetVideoServerPort），
+	// 而 Stop 在应用退出时清空字段。此前 ln/srv 是裸字段，Port 与 Stop 的
+	// 并发访问在 -race 下会报数据竞争；与 share.Server 用同一套约定。
+	mu  sync.Mutex
 	ln  net.Listener
 	srv *http.Server
 }
@@ -43,7 +49,6 @@ func (s *Server) Start() error {
 	if err != nil {
 		return err
 	}
-	s.ln = ln
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /video/", share.VideoHandler{State: s.st})
@@ -52,8 +57,15 @@ func (s *Server) Start() error {
 		ReadHeaderTimeout: constants.HTTPReadHeaderTimeout,
 		IdleTimeout:       constants.HTTPIdleTimeout,
 	}
+
+	// 端口必须在 Port() 能读到之前就位：前端调用 GetVideoServerPort 的时机
+	// 由它自己决定，赋值与读取之间没有顺序保证，因此统一在锁内提交。
+	s.mu.Lock()
+	s.ln = ln
 	s.srv = srv
-	// 与 share.Server 同一写法：捕获局部 srv，不在 goroutine 里读可能被改动的字段
+	s.mu.Unlock()
+
+	// 与 share.Server 同一写法：捕获局部 srv/ln，不在 goroutine 里读可能被改动的字段
 	go func() {
 		_ = srv.Serve(ln) // Stop 关闭 listener 后自然返回
 	}()
@@ -62,18 +74,31 @@ func (s *Server) Start() error {
 
 // Port 返回实际监听的端口；未启动或启动失败时为 0。
 func (s *Server) Port() int {
-	if s.ln == nil {
+	s.mu.Lock()
+	ln := s.ln
+	s.mu.Unlock()
+	if ln == nil {
 		return 0
 	}
-	return s.ln.Addr().(*net.TCPAddr).Port
+	return ln.Addr().(*net.TCPAddr).Port
 }
 
 // Stop 优雅停止回环服务器（应用退出时调用）。
+//
+// 幂等：与 share.Server.Stop 相同，取出字段后立即清空，因此重复调用或并发调用
+// 时后到者拿到 nil 直接返回。字段清空后 Port() 返回 0，前端据此让内联播放
+// 走失败回退（应用退出时已无意义，但保持一致）。
 func (s *Server) Stop() error {
-	if s.srv == nil {
+	s.mu.Lock()
+	srv := s.srv
+	s.srv = nil
+	s.ln = nil
+	s.mu.Unlock()
+
+	if srv == nil {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), stopTimeout)
 	defer cancel()
-	return s.srv.Shutdown(ctx)
+	return srv.Shutdown(ctx)
 }

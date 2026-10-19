@@ -22,6 +22,55 @@
   （= 静默清除密码并禁用保护，这是**安全事件**）与保存失败（= 重启后密码保护
   悄悄失效）都只输出到无效的 stdout，既没有时间戳也不进轮转文件。现全部改为
   `slog`：损坏重置用 `Warn`、保存/序列化失败用 `Error`
+- **`ShareStatus` 在共享未运行时丢弃 `folder_path`**，导致桌面端 webview 重载后
+  无法恢复共享目录与视频列表（`App.svelte` 的 `restoreBackendState` 正是靠它）。
+  原 Tauri 版无条件返回该字段；Go 版把赋值放在了 `if !running { return }` 之后。
+  原有测试只断言了 `Running/Port/IPs`，因此这条回归没有任何测试把守
+- **网页端"重新扫描电脑"可被任意网页跨站触发**：`/refresh` 改状态且会全盘重扫，
+  但没有任何 CSRF 防护。未启用密码时（默认状态）`withAuth` 放行一切，而浏览器对
+  跨站表单的 POST 既不预检、也不看同源策略——实测带 `Origin: http://evil.example`
+  与 `Sec-Fetch-Site: cross-site` 的请求返回 202 并真的开始在共享方电脑上满速读盘。
+  现新增 `withCSRFGuard`（`internal/share/csrf.go`）：`Sec-Fetch-Site: cross-site`
+  直接 403；有 `Origin` 时其 host（**含端口**）必须与 `Host` 相同
+  （`Origin: null` 同样拒绝）；两者都没有（curl/脚本）放行。
+  两个信号**同时**生效而不是二选一：浏览器对 IP 字面量只按 "site"（IP 本身）
+  判定 `Sec-Fetch-Site`，`http://192.168.1.5:8080` 发包到 `:6008` 会被标成
+  `same-site`，只看它会放过"同主机不同端口"这一整类来源。判据只依赖浏览器
+  **自动**附加的元数据，不引入 token，对同源前端与命令行零影响。
+  `/auth` 一并受保护（跨站页面不能借受害者的浏览器猜 4 位密码）
+- **`share.Server` / `player.Server` 的监听态字段无同步**：`Start` 写、
+  `Stop` 读写并清空 `srv`/`ln`/`port`，全程无锁。而 `App.shutdown`
+  此前用 `IsServerRunning()` 判断后**直接**调 `Stop`，绕过了状态机——
+  这与应用内的 `StopShareServer` 构成两条并发入口，`-race` 探针稳定复现
+  `read at server.go:134 / write at server.go:113`。现两个 `Server` 都加
+  `stateMu`/`mu`，`Stop` 取出字段后立即清空（后到者拿到 nil，幂等），
+  `Shutdown` 在锁外执行以免持锁等待 5 秒；`App.shutdown` 改走
+  `StartServerStopping → Stop → SetServerStopped`，与绑定方法完全一致
+- **配置 `enabled:true` + `password_hash:null` 时网页端被永久锁死**：两个字段
+  分别持久化，手工改坏配置或将来做字段迁移都会拼出这种组合——`withAuth` 认为
+  保护已启用而拦下所有请求，`/auth` 又因无哈希永远返回"未设置密码"，
+  只有桌面端 UI 能把保护关回去。现 `loadConfig` 自愈：无哈希即视为未启用，
+  并记一条 `Warn`（配置被外部改动的迹象）；`pepper` 原样保留
+- **未启用密码时 `/login` 仍渲染一个永远登不进去的页面**：`/auth` 会返回
+  "未设置密码"，而界面没有任何说明。现保护未启用时也 `302` 回 `/`，
+  与文档 "已认证（或未启用密码保护）时访问 /login 会重定向" 一致
+- **`isRootDirectory` 漏掉扩展长度 UNC 共享根**：`\\?\UNC\server\share`
+  剥掉 `\\?\` 后变成 `UNC\server\share`，既不以 `\\` 开头也不含盘符，
+  一路 `return false`——用户把整个网络共享选进来时会真的遍历整个共享
+  （正是这条守卫要防的"卡死"）。现识别 `UNC\` 前缀并等价还原成 `\\`
+- **限流剩余秒数向下截断**：锁定 30 秒、已过 29.2 秒时 `int(0.8) == 0`，
+  调用方以 `> 0` 判断是否锁定 → 提前放出一次尝试，登录页也拿不到倒计时秒数。
+  改用 `math.Ceil`（同一时刻返回 1，与倒计时语义一致）
+- **`/video/*` 的 `max-age=3600` 让"原地重编码/替换同名视频"最长一小时内
+  仍播旧内容**：改为 `Cache-Control: private, no-cache`——浏览器仍可缓存以支持
+  拖动进度条，但每次使用前带 `If-Modified-Since`/`If-Range` 重验，
+  未变化时只回 304/206 头
+- **`PlayVideo` 交给 ShellExecute 之前不校验目标是普通文件**：扩展名白名单只看
+  名字，而 `ResolveVideoPath` 会跟随符号链接——`link.mp4 -> 某目录`（或指向命名
+  管道/设备）都能通过。扫描器本身不收录非普通文件，所以这只能由手工构造的绑定
+  调用触发，而绑定调用正是攻击面（前端 JS 可直接调 `window.go.main.App.*`）。
+  现补 `isRegularFile`（`os.Stat` + `Mode().IsRegular()`），由
+  `TestIsRegularFile` 覆盖普通文件/目录/符号链接指向目录/不存在四种情形
 
 ### 变更
 
@@ -60,8 +109,6 @@
 - **登录页禁止缩放**：`user-scalable=no` 与 SPA 的 `index.html` 不一致，
   且对低视力用户是硬障碍（WCAG 1.4.4）。现移除，并新增
   `TestLoginTemplateAllowsZoom` 防止被加回去
-
-### 变更
 
 - **明度层级真正拉开**：`--bg #0f172a` 与 `--surface #111827` 此前只有
   **1.01:1**——内容面板与页面背景在明度上完全重合，全靠一圈 1.17:1 的边框区分；
@@ -111,6 +158,9 @@
   重建，旧元素仍持着上一个 `src`、清理逻辑也不跑。现按 `relativePath` 加
   `{#key}`，每个视频拿到全新的 `<video>`
 
+- `/auth` 移出 `gzipEligiblePaths`：其响应约 91 字节，gzip 后**反而增大**到约 116 字节，
+  而每次登录只发生一次，压缩纯属净亏损（新准入标准是"响应够大且会被反复拉取"）
+
 ### 新增
 
 - **手机端播放与列表适配**（网页端主要就是手机在用）：
@@ -147,18 +197,6 @@
   两侧仅 `media-src` 一处不同（桌面端内联播放走 `internal/player` 的回环服务器，
   与资产源不同源，不放行则视频全被拦），差异由 `desktop_csp_test.go` 逐指令锁定
 
-### 修复
-
-- **`ShareStatus` 在共享未运行时丢弃 `folder_path`**，导致桌面端 webview 重载后
-  无法恢复共享目录与视频列表（`App.svelte` 的 `restoreBackendState` 正是靠它）。
-  原 Tauri 版无条件返回该字段；Go 版把赋值放在了 `if !running { return }` 之后。
-  原有测试只断言了 `Running/Port/IPs`，因此这条回归没有任何测试把守
-
-### 变更
-
-- `/auth` 移出 `gzipEligiblePaths`：其响应约 91 字节，gzip 后**反而增大**到约 116 字节，
-  而每次登录只发生一次，压缩纯属净亏损（新准入标准是"响应够大且会被反复拉取"）
-
 ### 清理
 
 - 删除无调用者的 `state.ServerState.String()` 与 `constants.VideoTypes()`
@@ -167,6 +205,17 @@
 - 修正 `password.CleanupOnce` 的失实注释：它称"`/auth` 入口会顺带调用"，
   而 `internal/share/auth.go` 明确说明**不调用**（该端点免鉴权可被反复打，
   抢 `m.mu` 会拖慢整站）——性能修复后忘了回头改注释
+
+### 文档
+
+- `docs/api.md`：补充 **CSRF 防护**一节（判据表与理由）；修正 Host 白名单对
+  `::1` 的描述（**裸 `::1` 会被拒**，只有 `[::1]:6008` 这种带方括号的形式可用）；
+  修正 `405` 的 `Allow` 说明（取决于该路径注册的方法，`/auth` 是
+  `GET, HEAD, POST`）；补充 `http.ServeMux` 对 `.`/`..` 的 **307** 清理重定向；
+  补记 `/video/*` 的缓存策略
+- `AGENTS.md` 与 `README.md` 无需改动（结论：本次未发现需要更新的一致性断言），
+  但仓库里该文件的**磁盘名**从 `agents.md` 更正为 `AGENTS.md`：索引里一直是
+  `AGENTS.md`，Windows 的大小写不敏感盘上看不出差异，Linux 上会表现为一次重命名
 
 ## [0.4.2] - 2026-10-14
 

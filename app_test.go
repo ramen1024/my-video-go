@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // 根包此前没有任何测试：PlayVideo 与 OpenURL 是绑定给前端的安全边界，
 // 它们依赖的两个纯函数在这里锁住（其余逻辑需要 Wails 运行时，不在此覆盖）。
@@ -68,5 +72,45 @@ func TestIsAllowedExternalURL(t *testing.T) {
 		if isAllowedExternalURL(u) {
 			t.Errorf("应拒绝: %q", u)
 		}
+	}
+}
+
+// PlayVideo 交给 ShellExecute 之前必须确认目标是**普通文件**。
+//
+// 扩展名白名单只看名字：ResolveVideoPath 会跟随符号链接，于是
+// `link.mp4 -> 某个目录` 或指向命名管道的链接都能通过扩展名检查。
+// 扫描器本身不收录非普通文件，这条只拦手工构造的绑定调用——
+// 而绑定调用正是攻击面（前端 JS 可以直接调 window.go）。
+func TestIsRegularFile(t *testing.T) {
+	dir := t.TempDir()
+
+	real := filepath.Join(dir, "a.mp4")
+	if err := os.WriteFile(real, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !isRegularFile(real) {
+		t.Fatalf("普通文件应放行: %q", real)
+	}
+
+	// 目录：名字可以是 a.mp4，但它不是文件
+	asDir := filepath.Join(dir, "dir.mp4")
+	if err := os.Mkdir(asDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if isRegularFile(asDir) {
+		t.Fatalf("目录必须拒绝（否则会把目录交给系统播放器）: %q", asDir)
+	}
+
+	// 符号链接指向目录：Stat 跟随链接后仍是目录
+	link := filepath.Join(dir, "link.mp4")
+	if err := os.Symlink(asDir, link); err != nil {
+		t.Logf("跳过符号链接用例（需要权限）: %v", err)
+	} else if isRegularFile(link) {
+		t.Fatalf("指向目录的符号链接必须拒绝: %q", link)
+	}
+
+	// 不存在的路径
+	if isRegularFile(filepath.Join(dir, "nope.mp4")) {
+		t.Fatal("不存在的路径必须拒绝")
 	}
 }

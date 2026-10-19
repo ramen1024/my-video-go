@@ -504,3 +504,95 @@ func isAllDigits(s string) bool {
 	}
 	return true
 }
+
+// 配置里 enabled=true 但 password_hash 为 null 时，必须自愈为"未启用"。
+//
+// 修复前的行为：withAuth 认为保护已启用 → 拦下所有请求；而 /auth 因为
+// m.hash == "" 永远返回"未设置密码" → 网页端被**永久**锁死，只有桌面端 UI
+// 能把保护关回去。这种组合正常写入路径产生不了（ResetPassword 会同时置
+// enabled=false），但手工改坏配置或将来做字段迁移都会掉进去。
+func TestEnabledWithoutHashFallsBackToDisabled(t *testing.T) {
+	dir := t.TempDir()
+	cfg := `{"password_hash": null, "enabled": true, "pepper": "` + strings.Repeat("ab", 32) + `"}`
+	if err := os.WriteFile(filepath.Join(dir, "password_config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+
+	if m.Enabled() {
+		t.Fatal("没有密码哈希时不得处于已启用状态（否则 /auth 永远失败、所有请求被拦下）")
+	}
+	status := m.Status()
+	if status.Enabled || status.HasPassword {
+		t.Fatalf("状态应为未启用且无密码: %+v", status)
+	}
+	// 自愈后应可正常设置密码并启用
+	if err := m.SetPassword("1234"); err != nil {
+		t.Fatalf("自愈后应能设置密码: %v", err)
+	}
+	if err := m.SetPasswordEnabled(true); err != nil {
+		t.Fatalf("自愈后应能启用保护: %v", err)
+	}
+	if _, err := m.Authenticate("1.2.3.4", "1234"); err != nil {
+		t.Fatalf("启用后应能认证: %v", err)
+	}
+}
+
+// pepper 必须保留：自愈只修正 enabled，不应连 pepper 一起重置
+// （重置 pepper 会让已有哈希永久失效）。
+func TestEnabledWithoutHashKeepsPepper(t *testing.T) {
+	dir := t.TempDir()
+	pepper := strings.Repeat("cd", 32)
+	cfg := `{"password_hash": null, "enabled": true, "pepper": "` + pepper + `"}`
+	if err := os.WriteFile(filepath.Join(dir, "password_config.json"), []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m, err := New(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer m.Close()
+	if m.pepper != pepper {
+		t.Fatalf("pepper 不应变化: 得到 %q，期望 %q", m.pepper, pepper)
+	}
+}
+
+// 剩余锁定秒数必须**向上取整**：锁定 30 秒、已过 29.2 秒时剩余 0.8 秒，
+// 截断成 0 会让 Authenticate 认为"未锁定"而提前放出一次尝试，登录页也会
+// 拿到"请0秒后重试"而不进入倒计时。ceil 后同一时刻返回 1。
+func TestCheckRateLimitRoundsUpSubSecondRemainder(t *testing.T) {
+	m := newTestManager(t)
+
+	m.mu.Lock()
+	m.failed["1.2.3.4"] = &failedAttempt{
+		lockedUntil: time.Now().Add(800 * time.Millisecond),
+	}
+	got := m.checkRateLimitLocked("1.2.3.4")
+	m.mu.Unlock()
+
+	if got != 1 {
+		t.Fatalf("剩余 800ms 应报 1 秒（向上取整），实际 %d", got)
+	}
+
+	// 已过期则必须是 0（不能让过期记录永远锁着）
+	m.mu.Lock()
+	m.failed["1.2.3.4"] = &failedAttempt{lockedUntil: time.Now().Add(-time.Second)}
+	expired := m.checkRateLimitLocked("1.2.3.4")
+	m.mu.Unlock()
+	if expired != 0 {
+		t.Fatalf("已过期应返回 0，实际 %d", expired)
+	}
+
+	// 整秒（29.5→30）也要落在正确的整数上
+	m.mu.Lock()
+	m.failed["1.2.3.4"] = &failedAttempt{lockedUntil: time.Now().Add(29*time.Second + 500*time.Millisecond)}
+	got = m.checkRateLimitLocked("1.2.3.4")
+	m.mu.Unlock()
+	if got != 30 {
+		t.Fatalf("剩余 29.5 秒应报 30 秒，实际 %d", got)
+	}
+}

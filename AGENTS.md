@@ -86,12 +86,25 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   字段：`Enabled()` 在 `withAuth` 的每请求路径上（含每个视频 Range），走 mu 会让
   整站请求排在 Argon2id（~25ms）与配置落盘后面。`TestEnabledIsLockFree` 锁定这一点，
   **不要**把它改回受 `mu` 保护
-- `share/` — 内嵌 HTTP 服务器：`Handler()` 组装 安全头 → Host 校验 → 会话鉴权 → 路由；
+- `share/` — 内嵌 HTTP 服务器：`Handler()` 组装 安全头 → gzip → Host 校验 → CSRF →
+  会话鉴权 → 路由；
   `ResolveVideoPath` 是桌面端与网页端共用的路径解析/校验；`VideoHandler` 是两端共用的
   `/video/*` 流式播放处理（路径校验/白名单/Range）。`withAuth` 只对**文档导航**
   （`Sec-Fetch-Dest: document`/`iframe`，缺失时退回 `Accept: text/html`）302 到
   `/login`，其余请求一律 401 —— `<video>` 拿到登录页 HTML 只会报"无法播放"，
   把会话过期误报成解码失败。**不要**改回统一 302
+- **`withCSRFGuard`（`csrf.go`）必须在 `withAuth` 之内**：未启用密码时 `withAuth`
+  放行一切，跨站表单 POST 会一路打到 `/refresh`（修复前实测返回 202 并真的开始
+  全盘扫描）。判据只用浏览器**自动**附加的元数据，不引 token：`Sec-Fetch-Site:
+  cross-site` 直接拒绝；**只要有 `Origin` 就必须与 `Host` 同源（含端口）**，
+  `Origin: null` 同样拒绝；两者都没有（curl/脚本）放行。
+  两个信号**同时**生效而不是二选一——浏览器对 IP 字面量只按 "site"（IP 本身）
+  判定 `Sec-Fetch-Site`，`http://192.168.1.5:8080` 发包到 `:6008` 会被标成
+  `same-site`，只看它就会放过"同主机不同端口"这一整类来源
+  （`TestCSRFRejectsSameSiteDifferentPort` 锁定）。
+  `TestCSRFRejectsCrossSiteRefresh` 锁定"未启用密码时也拦得住"，
+  `TestCSRFAllowsSameOriginRequests` 锁定"不误伤同源"——两条缺一不可：
+  只测后者的话，整个中间件被删掉测试照样绿
 - `player/` — 桌面端内联播放专用的**回环 HTTP 服务器**（127.0.0.1 随机端口，
   只路由 `/video/` 到 `share.VideoHandler`）
 - `state/` — AppState：atomic.Pointer 快照（**列表+ETag+共享目录三元组**、共享信息、
@@ -188,6 +201,16 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   无法重命名/删除正在共享的视频目录（也会让 `t.TempDir()` 清理失败）
 - **`/video/*` 的扩展名白名单按请求路径判定**（不是打开后看真实文件名）：
   非视频请求统一 403，不因文件是否存在而在 403/404 间变化，避免用状态码探测
+- **`/video/*` 的缓存是 `private, no-cache`**（不是 `max-age`）：浏览器可缓存以支持
+  拖动进度条，但**每次使用前必须重验**（`Last-Modified` + `If-Modified-Since`/
+  `If-Range`，未变化只回 304/206 头）。此前是 `max-age=3600, must-revalidate`，
+  而 `max-age` 让"没到期"的请求根本不发，于是原地重编码/替换同名视频后，
+  网页端与桌面端都会继续播旧内容最长一小时且无任何提示。实测（webpreview）：
+  同尺寸替换文件内容后带旧 `If-Modified-Since` 的请求返回 200 + 新内容
+- **桌面端 `PlayVideo` 在 ShellExecute 之前必须确认目标是普通文件**
+  （`isRegularFile`）：扩展名白名单只看名字，而 `ResolveVideoPath` 会跟随符号链接，
+  `link.mp4 -> 某目录` / 指向命名管道都能过白名单。扫描器不收录非普通文件，
+  这只能由手工构造的绑定调用触发——正是要拦的那条路径（`TestIsRegularFile` 锁死）
 - **gzip 只在 `gzipEligiblePaths` 列出的 JSON 接口上启用**（2000 条列表实测
   370KB → 6.4KB）。两条硬约束：**`/video/*` 绝不能压**（Range/206 与
   `Content-Length` 语义会被破坏，视频本身也无可压空间）；**304 绝不能写出任何
@@ -268,6 +291,15 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   连接**——否则调用方以为"已停止"、状态机回到 Stopped，旧连接却还在被服务，
   紧接着的 Start 会在同一端口叠一个服务器。**不要**绕过状态机直接起停服务器
   —— get_share_status 恢复界面依赖 Running 状态与 share_info
+- **`App.shutdown` 也必须走状态机**（`StartServerStopping → Stop → SetServerStopped`）。
+  它一度是 `if IsServerRunning() { Stop() }`：**第二条** Stop 入口，与
+  `StopShareServer` 并发时状态机形同虚设。状态机在 Stopped/Stopping 会返回错误，
+  直接跳过即可（幂等）。同理 `player.Server` 的 `Port()` 会被前端随时调用，
+  与退出时的 `Stop()` 并发——两个 `Server` 的监听态字段统一由 `stateMu`/`mu` 保护，
+  `Stop` 取出字段后立即清空（后到者拿 nil），`Shutdown` 在**锁外**执行
+  （持锁等待 5 秒会让紧接着的 Start 卡住）。回归测试：
+  `TestStopIsConcurrencySafe`、`TestHandlerConcurrentWithStop`、
+  `TestPlayerPortConcurrentWithStop`（`-race` 下均须绿）
 - `share.Server.Start` 的 `Serve` goroutine **必须捕获局部 `srv`/`ln`**，不能读
   `s.srv`/`s.ln` 字段：`Stop` 会把字段置 nil，而 goroutine 未必已被调度——
   Start 后立刻 Stop 会 panic 在 `net/http.(*Server).Serve` 的 nil 接收者上

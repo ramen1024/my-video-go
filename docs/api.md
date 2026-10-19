@@ -11,8 +11,9 @@ Go `net/http` 服务器处理，监听 `0.0.0.0`（即所有网卡）上的端�
 ## Host 校验
 
 **所有端点（包括 `POST /auth`）** 在路由分发前都先校验 `Host` 头：仅接受本机 IP（服务器
-启动时探测到的网卡地址，运行期间冻结）、`127.0.0.1`、`localhost`、`::1`（可带端口，IPv6
-字面量写作 `[::1]:6008`）。其他 Host 返回 `403 Invalid Host header`。
+启动时探测到的网卡地址，运行期间冻结）、`127.0.0.1`、`localhost`（可带端口；IPv6
+字面量须写作 `[::1]:6008` 这种带方括号的形式）。其他 Host 返回 `403 Invalid Host header`。
+（裸 `::1` 不带方括号时会被解析成 `":"`，因而不在白名单内——这是有意的收紧，不是可用写法。）
 
 这道校验用于阻断 DNS rebinding：恶意网页可以把域名解析到本机，但无法让浏览器把 Host
 伪装成本机 IP。
@@ -44,6 +45,26 @@ Go `net/http` 服务器处理，监听 `0.0.0.0`（即所有网卡）上的端�
 注意：**前端静态资源同样受保护**，未认证时请求 `/assets/...` 得到 `401` 而不是 JS 文件。
 
 已认证（或未启用密码保护）时访问 `/login` 会 `302` 重定向回 `/`。
+
+## CSRF 防护
+
+`POST`（以及 `PUT`/`PATCH`/`DELETE`）请求额外经过一道同源校验，**与是否启用密码无关**：
+
+| 请求头 | 判定 |
+|--------|------|
+| `Sec-Fetch-Site: cross-site` | `403 Cross-site request rejected` |
+| 有 `Origin`，且其 host（**含端口**）与 `Host` 不同 | `403`（`Origin: null` 同样拒绝） |
+| 有 `Origin` 且同源（`Sec-Fetch-Site` 为 `same-site` 也一样） | 放行 |
+| 两者都没有（curl、脚本、老浏览器） | 放行 |
+
+两个信号**同时**用而不是二选一：浏览器对 IP 字面量只按 "site"（IP 本身）判定
+`Sec-Fetch-Site`，`http://192.168.1.5:8080` 发包到 `:6008` 会被标成 `same-site`，
+只看它就会放过"同主机不同端口"的来源；`Origin` 精确到端口，只要浏览器给了就必须比。
+
+为什么需要：未启用密码时（默认状态）`withAuth` 放行一切，而浏览器对跨站表单的 `POST`
+既不预检也不看同源策略，任何网页都能让受害者的浏览器触发 `/refresh`（全盘重扫）。
+判据只依赖浏览器**自动**附加的元数据，不引入 token，对同源前端与命令行零影响。
+`GET`/`HEAD` 不走这道校验（本服务的只读请求都在这两个方法上）。
 
 Session Cookie 属性：`HttpOnly; SameSite=Strict; Path=/`，有效期与服务器端 session 一致
 （1 小时）。
@@ -253,6 +274,10 @@ Range 解析由 Go 标准库 `http.ServeContent` 完成（桌面端 webview 内�
   `Content-Range: bytes */<文件大小>`）。
 - 响应头包含 `Accept-Ranges: bytes` 与 `Content-Type`（根据**小写化后的**扩展名自动推断，
   因此 `Movie.MP4` 也能拿到 `video/mp4`）。
+- 缓存策略是 `Cache-Control: private, no-cache`：浏览器可缓存，但每次使用前都要带
+  `If-Modified-Since`/`If-Range` 重验（未变化时 `304`/`304` 之外只回头部）。
+  此前是 `max-age=3600`，于是原地重编码同名文件后，网页端与桌面端都会继续播旧内容，
+  最长一小时且无任何提示。
 - 密码保护启用且会话失效时返回 `401`（**不是** `302`）：`<video>` 拿到的必须是明确的
   状态码而不是登录页 HTML，否则会把"需要重新登录"报成"该文件无法播放"。
 
@@ -268,8 +293,11 @@ Range: bytes=0-1048575
 ## 其他说明
 
 - **方法不匹配**（如 `POST /videos`、`PUT /anything`）返回 `405 Method Not Allowed`
-  并带 `Allow: GET, HEAD`。注意 `GET /` 在路由表里匹配任意路径，因此**任何**非 GET
-  请求、无论路径是否存在，都会先命中这条 405，而不是 404。
+  并带 `Allow` 头（内容取决于该路径注册过的方法，例如 `/auth` 是 `GET, HEAD, POST`，
+  `/videos` 是 `GET, HEAD`）。注意 `GET /` 在路由表里匹配任意路径，因此**任何**非
+  GET 请求、无论路径是否存在，都会先命中这条 405，而不是 404。
+- 路径中含 `.`/`..` 段的请求会先被 `http.ServeMux` **307 重定向**到清理后的路径
+  （例如 `/video/Season 1/../a.mp4` → `/video/a.mp4`），这是标准库行为。
 - GET 请求的未匹配路径返回 `404 Not found`。
 - 所有响应都带 `X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer` 与
   `X-Frame-Options: DENY`。

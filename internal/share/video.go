@@ -78,7 +78,15 @@ func (h VideoHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", constants.VideoContentType(ext))
-	w.Header().Set("Cache-Control", "private, max-age=3600, must-revalidate")
+	// 允许浏览器缓存以支持拖动进度条，但**必须每次都向服务端求证**：
+	// `no-cache` 表示"可存、用前重验"，配合 ServeContent 发出的
+	// Last-Modified 与 If-Modified-Since/If-Range，命中时只回 304/206 头。
+	//
+	// 此前是 `max-age=3600, must-revalidate`：一小时内的请求**根本不发**，
+	// 于是原地重编码同名文件（把 a.mp4 换个码率重新导出）或替换成另一个视频后，
+	// 网页端与桌面端都会继续播放旧内容，最长一小时，且没有任何提示。
+	// 视频是本应用的主内容，宁可多一次轻量的条件请求。
+	w.Header().Set("Cache-Control", "private, no-cache")
 	// ServeContent 自动处理：Range 单段/后缀、206、416、Content-Range、
 	// Accept-Ranges: bytes、If-Range、Last-Modified
 	http.ServeContent(w, r, fi.Name(), fi.ModTime(), f)
