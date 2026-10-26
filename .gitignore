@@ -23,6 +23,9 @@ frontend/node_modules/
 *.log
 dev.log
 
+# 工作区数据目录（AI 助手的工作记录与记忆文件，不属于仓库内容）
+.workbuddy/
+
 # IDE
 .idea/
 .vscode/
