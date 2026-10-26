@@ -185,6 +185,12 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   会断言产物无内联脚本。若升级构建工具后产物出现内联脚本，白屏会在运行时才暴露——
   改 CSP 的同时必须同步该检查。既是常量也是**桌面端策略的派生源**（见下条），
   因此导出——改名时要一起看 `desktop_csp.go`
+- **打开外部链接必须走 `platform.openExternal`，不能写成 `<a href>`**：桌面端跑在
+  Wails webview 里，普通链接会让**应用自己**就地导航到目标站点——整页变成网页、
+  SPA 状态全丢，而且没有"返回"可点。`openExternal` 在桌面端交给系统浏览器
+  （Go 侧 `App.OpenURL` → `runtime.BrowserOpenURL`，只放行 http/https），
+  网页端开新标签页。共享面板的"打开访问地址"与页脚的"源码"都走它，所以组件里
+  用的是 `<button>` 并抹掉原生外观（`background:none; border:0; padding:0; font:inherit`）
 - **视频扩展名一律按小写比较**：`videoTypes` 的键是小写，查表前必须 `ToLower`；
   `/video/*` 的白名单与 Content-Type 复用**同一个已小写化**的扩展名（`Movie.MP4`
   必须拿到 `video/mp4`）
@@ -261,6 +267,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   资源）、`frontend/package.json` 的 `version`、`CHANGELOG.md` 顶部的
   `## [x.y.z] - 日期`。
   漏掉 CHANGELOG 是这里最常见的漂移，`check-config-sync.mjs` 会红灯。
+  **页脚显示的版本号不是第四处手写副本**：`frontend/vite.config.ts` 在构建期从
+  `wails.json` 的 `info.productVersion` 取值、用 `define` 替换 `__APP_VERSION__`
+  （读不到或不是 `x.y.z` 直接让构建失败），所以"要改的地方"仍然只有三处；
+  不要在 `.svelte` 里手写版本字符串
   打 tag 即触发 `.github/workflows/release.yml` 构建并创建 Release，
   已发布过的 tag 不要原地重打（附件与已下载的人会对不上）
 - **发版顺序：先推 `master`，等 CI 在那个 commit 上全绿，最后才推 tag**。

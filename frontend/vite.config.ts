@@ -1,6 +1,27 @@
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
+
+/**
+ * 产品版本，构建期从 `wails.json` 的 `info.productVersion` 取。
+ *
+ * 界面上要显示版本号，但版本**不能**在前端再抄一份：wails.json / package.json /
+ * CHANGELOG 三处已经由 `scripts/check-config-sync.mjs` 锁死一致，第四份手写副本
+ * 不会被任何断言覆盖，发版时必然漂移（症状是界面自称旧版本，而 tag 已经推了）。
+ *
+ * 取 wails.json 而不是 package.json：前者进 exe 版本资源，是真正的源头；
+ * package.json 的 version 只是记录（同样的理由写在 check-config-sync.mjs 里）。
+ */
+const pkgVersion: unknown = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../wails.json", import.meta.url)), "utf8"),
+)?.info?.productVersion;
+
+if (typeof pkgVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(pkgVersion)) {
+  // 静默回退成 "unknown" 会让"界面版本与 exe 版本对不上"重新变成不可见的漂移，
+  // 因此这里直接让构建失败
+  throw new Error(`无法从 wails.json 读取合法的 info.productVersion：${String(pkgVersion)}`);
+}
 
 /**
  * 后端端口：`wails dev` 会把 Go 侧挂在哪里由 Wails 决定；纯 `pnpm dev` 场景下
@@ -13,6 +34,10 @@ const API_PATHS = ["/videos", "/video", "/refresh", "/refresh-status", "/auth", 
 
 export default defineConfig({
   plugins: [svelte()],
+  define: {
+    // 页脚显示的版本号（见上方 pkgVersion 的说明）
+    __APP_VERSION__: JSON.stringify(pkgVersion),
+  },
   resolve: {
     alias: {
       // 沿用原版的 $lib 别名，组件代码零改动移植

@@ -22,6 +22,15 @@
 
   const isDesktop = platform.kind === "desktop";
 
+  /**
+   * 源码仓库地址（页脚"源码"入口）
+   *
+   * 放在页脚而不是顶栏动作区：它是"关于这个软件"的元信息，不是一次任务操作。
+   * 顶栏那三个按钮（选择文件夹 / 重新扫描 / 局域网共享）是用户的主线动线，
+   * 塞进去会抢视线，且 Header 在窄屏会折行、再挤一个就更容易误触。
+   */
+  const SOURCE_URL = "https://github.com/ramen1024/my-video-go";
+
   // videos 用 $state.raw：列表整体替换，元素本身从不原地修改。
   // 若用普通 $state，读取拿到的是 Proxy，而 platform.loadVideos() 返回的是普通
   // 数组，于是下方 refreshList 的 `next !== videos` **恒为真**——"列表未变化时
@@ -175,6 +184,23 @@
       ? `，另有 ${report.skipped_small_count - report.skipped_small.length} 个未列出`
       : "";
     return names + more;
+  }
+
+  /**
+   * 打开源码仓库
+   *
+   * **必须**走 `platform.openExternal`，不能写成 `<a href>`：桌面端跑在 Wails
+   * webview 里，普通链接会让**应用自己**就地导航到 GitHub——整页变成网页、
+   * SPA 状态全丢，而且没有"返回"可点。openExternal 在桌面端交给系统浏览器
+   * （Go 侧 `App.OpenURL`，只放行 http/https），网页端开新标签页；
+   * 共享面板里那个"打开访问地址"走的也是这条路。
+   */
+  async function openSource() {
+    try {
+      await platform.openExternal(SOURCE_URL);
+    } catch (e) {
+      console.error("打开源码链接失败:", e);
+    }
   }
 
   /** 交给系统默认播放器（网页端无此能力，由 canOpenWithSystemPlayer 守卫） */
@@ -454,6 +480,40 @@
       <VideoTable {videos} onPlay={playVideo} preferInlinePlayback={platform.preferInlinePlayback} />
     {/if}
   </div>
+
+  {#if isDesktop}
+    <!--
+      页脚：只承载"关于这个软件"的元信息（版本 / 许可证 / 源码），不参与任务动线。
+
+      **只桌面端渲染**。网页端那侧是家人用手机看视频，源码链接对他们没有意义，
+      而手机屏幕的纵向空间寸土寸金，全部要留给列表。
+
+      版本号不是手写的：`__APP_VERSION__` 由 vite.config.ts 在构建期从
+      wails.json 的 info.productVersion 替换进来（那条链路由 check-config-sync
+      锁死三处一致），前端不再多一份会漂移的副本。
+    -->
+    <footer class="app-footer">
+      <span>视频扫描器 v{__APP_VERSION__} · GPL-3.0</span>
+      <button class="source-link" onclick={openSource} title="在浏览器中打开源码仓库">
+        源码
+        <svg
+          width="10"
+          height="10"
+          viewBox="0 0 12 12"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="1.5"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <path d="M3.2 8.8 L8.8 3.2" />
+          <path d="M4.6 3.2 H8.8 V7.4" />
+        </svg>
+      </button>
+    </footer>
+  {/if}
 </main>
 
 <style>
@@ -551,6 +611,41 @@
     overflow: clip;
     display: flex;
     flex-direction: column;
+  }
+
+  /* 页脚：一行元信息，不比列表更重要，因此用最弱的可读级别。
+     高度 = 一行 11px 文字（line-height 1.6 ≈ 18px）+ 8px 上间距 ≈ 26px，
+     flex-shrink: 0 防止在矮窗口里被列表压扁成半行。 */
+  .app-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-shrink: 0;
+    padding: 8px 2px 0;
+    font-size: var(--fs-xs);
+    line-height: 1.6;
+    color: var(--text-tertiary);
+  }
+
+  /* 用 button 而不是 <a>：桌面端是 Wails webview，普通链接会把**应用自己**
+     导航到 GitHub（见 openSource 的说明）。因此这里要抹掉原生按钮外观，
+     让它读起来像一行文字链接。焦点环由 theme.css 的全站 :focus-visible 提供。 */
+  .source-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    padding: 0;
+    border: 0;
+    background: none;
+    font: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+
+  .source-link:hover {
+    color: var(--accent-light);
+    text-decoration: underline;
   }
 
   .loading {
