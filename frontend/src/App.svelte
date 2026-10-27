@@ -35,8 +35,8 @@
    *
    * 国内打不开 GitHub 是常态，只给一个 GitHub 入口等于没有入口——点了要么一直转圈，
    * 要么连系统浏览器都弹不出来。两个入口并排放，用户自己挑能开的那个。
-   * 这个地址必须与 `mirror.yml` / `release.yml` / README 下载节一致，
-   * `check-config-sync.mjs` 会断言四处相同。
+   * 这个地址必须与 `release.yml` 的产物上传目标、README 下载节一致，
+   * `check-config-sync.mjs` 会断言三处相同。
    */
   const MIRROR_URL = "https://gitee.com/my_little_world/my-video-go";
 

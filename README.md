@@ -31,7 +31,8 @@
 
 > **国内打不开 GitHub 时**，改用 Gitee 镜像：
 > [gitee.com/my_little_world/my-video-go](https://gitee.com/my_little_world/my-video-go/releases/latest)。
-> 那边的 exe 与 GitHub 是同一份构建产物；代码可能晚几分钟同步，但发布版是同步推过去的。
+> exe 与 GitHub 是同一份构建产物（发版时自动传到 Gitee），代码由 Gitee 自动同步、
+> 可能晚几分钟。Gitee 侧是只读镜像：Issue / 反馈请到 GitHub 仓库提。
 
 版本之间的变化见 [更新日志](CHANGELOG.md)。
 
