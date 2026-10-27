@@ -199,6 +199,19 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   浏览器把整条规则丢掉，样式静默失效（`.dismiss-btn` 就这样坏过一段时间，
   提示条上的关闭按钮渲染成系统默认按钮）。全局规则直接写普通选择器；
   产物里可以用 `grep -o ":global[^{]*{" dist/assets/*.css` 复核（应为空）
+- **exe 版本资源里的字符串在 .NET 侧读不到，但资源本身是对的——不要试图改
+  `build/windows/info.json`**。该文件经 Wails 渲染后由 `winres v0.3.1` 写进
+  `-res.syso`，用 Win32 的 `VerQueryValue` 或 WMI 验证，`FileVersion` 与
+  ProductName / CompanyName / Copyright 全部存在且正确：
+  `Get-CimInstance CIM_DataFile -Filter "Name='…'"` 能读到 `Version`（0.5.1.0）
+  与 `Manufacturer`（= CompanyName），资源管理器"属性 → 详细信息"走的也是这套
+  API。空的只是 `(Get-Item exe).VersionInfo.ProductVersion`——那是 **.NET 自己
+  的解析器**，与 winres 生成的节点结构不兼容。
+  四种写法都试过（语言键 `0000` / `0409` / `0804`、以及去掉模板的纯字面量），
+  .NET 一侧全空、CIM 一侧全对——改配置无解。要修只能换 Wails 版本或自定义
+  syso，收益与成本不成比例，别把它当成本项目的 bug 去调。
+  `CompanyName` 由 `wails.json` 的 `info.companyName` 提供（当前是 `ramen1024`）；
+  不配的话 Wails 用项目名兜底，属性里显示的是技术名 `my-video-go`。
 - 浏览器端 CSP（`internal/share/response.go` 的 `BrowserCSP`）依赖**"Vite 产物没有内联
   script"**这一前提，所以是 `script-src 'self'` 而无需 nonce；`scripts/check-web-build.mjs`
   会断言产物无内联脚本。若升级构建工具后产物出现内联脚本，白屏会在运行时才暴露——
