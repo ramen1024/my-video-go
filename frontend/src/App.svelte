@@ -89,16 +89,6 @@
    * 唯一诚实的信息，也足以证明它没卡死。
    */
   let scanProgress = $state<ScanProgress>({ scanning: false, visited: 0, found: 0 });
-  /** 有文件正被拖过窗口（仅桌面端，用于遮罩） */
-  let isDragOver = $state(false);
-  /**
-   * 拖拽进入/离开的层数计数
-   *
-   * dragleave 在子元素之间移动时会**逐层**触发（每穿过一层 DOM 边界就来一次），
-   * 直接用它置 false 会让遮罩疯狂闪烁；用进出计数抵消。drop 时统一归零，避免
-   * 某一次 enter 没配上 leave 把遮罩永久卡住。
-   */
-  let dragDepth = 0;
 
   /** 千分位整数：上万条的目录里"已检查 12345 个文件"是一串糊在一起的字 */
   function formatCount(n: number): string {
@@ -445,26 +435,6 @@
     noticeMsg = "请拖动文件夹：单个文件无法确定该扫描哪个目录";
   }
 
-  function handleWindowDragEnter(e: DragEvent) {
-    if (!platform.canDropFolder) return;
-    // 只看文件拖拽（与 Wails 运行时内部的判据一致）
-    if (!e.dataTransfer?.types.includes("Files")) return;
-    dragDepth += 1;
-    isDragOver = true;
-  }
-
-  function handleWindowDragLeave() {
-    if (!platform.canDropFolder) return;
-    dragDepth = Math.max(0, dragDepth - 1);
-    if (dragDepth === 0) isDragOver = false;
-  }
-
-  function handleWindowDrop() {
-    // 与 enter/leave 的计数无关，一律归零：宁可少一次遮罩，也不要它卡在屏幕上
-    dragDepth = 0;
-    isDragOver = false;
-  }
-
   onMount(async () => {
     // 平台初始化（桌面端预取回环视频服务器端口，videoSrc 依赖它）
     await platform.init();
@@ -515,38 +485,28 @@
 </script>
 
 <!--
-  全局拖拽监听：只在桌面端有意义（canDropFolder），网页端的处理函数会立即返回。
-  放在这里而不是 main 上：拖到窗口任意位置都该有反馈，包括页脚与留白处。
--->
-<svelte:window
-  ondragenter={handleWindowDragEnter}
-  ondragleave={handleWindowDragLeave}
-  ondrop={handleWindowDrop}
-/>
-
-<!--
   data-file-drop-target：Wails v3 的**文档契约**——文件被拖到带该属性的元素上时
   才会触发窗口的 WindowFilesDropped 事件（Go 侧据此判目录再推给前端）。
 
-  高亮仍由上面的进出计数驱动、用自己那张"松手即扫描"的卡片，而不是运行时加的
-  file-drop-target-active 类：后者只有一个空类名，而这个遮罩要说明"当前的视频
-  列表会被替换"——第一次拖入时用户并不知道会发生什么。
-  属性与遮罩各管一件事，不冲突。
+  拖拽高亮也由这个属性驱动：运行时在 dragover 时给**最近的一个**带该属性的元素
+  加 file-drop-target-active 类、dragleave/drop 时移除，因此这里**不需要**自己
+  维护进出计数（v2 时代必须自己数，否则 dragleave 逐层触发会把遮罩闪成频闪）。
+  显隐规则见下方 .drop-overlay 的 CSS——用 :global 匹配那个运行时才出现的类名。
 -->
 <main class="app" data-file-drop-target>
-  {#if isDragOver}
-    <!--
-      拖拽遮罩：纯视觉反馈，drop 本身由 Go 侧的 WindowFilesDropped 处理。
-      aria-hidden：它没有可操作内容，读屏器念一遍"松手即扫描"只会打断当前上下文。
-    -->
-    <div class="drop-overlay" aria-hidden="true">
-      <div class="drop-card">
-        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
-        <p class="drop-title">松手即扫描这个文件夹</p>
-        <p class="drop-note">当前的视频列表会被替换</p>
-      </div>
+  <!--
+    拖拽遮罩：纯视觉反馈，drop 本身由 Go 侧的 WindowFilesDropped 处理。
+    常驻 DOM、默认 display:none，只有 <main> 带上 file-drop-target-active 时才显示；
+    不做成 {#if} 是因为显隐完全由 CSS 决定，Svelte 状态在这里是多余的。
+    aria-hidden：它没有可操作内容，读屏器念一遍"松手即扫描"只会打断当前上下文。
+  -->
+  <div class="drop-overlay" aria-hidden="true">
+    <div class="drop-card">
+      <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+      <p class="drop-title">松手即扫描这个文件夹</p>
+      <p class="drop-note">当前的视频列表会被替换</p>
     </div>
-  {/if}
+  </div>
 
   {#if currentVideo}
     <!--
@@ -691,7 +651,7 @@
       而手机屏幕的纵向空间寸土寸金，全部要留给列表。
 
       版本号不是手写的：`__APP_VERSION__` 由 vite.config.ts 在构建期从
-      wails.json 的 info.productVersion 替换进来（那条链路由 check-config-sync
+      build/windows/info.json 的 ProductVersion 替换进来（那条链路由 check-config-sync
       锁死三处一致），前端不再多一份会漂移的副本。
     -->
     <footer class="app-footer">
@@ -876,17 +836,25 @@
 
   /* 拖拽遮罩：整页压暗，中间一张"松手即扫描"的卡片。
      pointer-events: none 必须保留——它只是视觉层，事件要能穿透到下面
-     （Wails 运行时的 drop 判据会做 elementFromPoint 之类的检查）。 */
+     （运行时靠 document.elementFromPoint 找投放区，遮罩若可命中就会把它挡掉）。 */
   .drop-overlay {
     position: fixed;
     inset: 0;
     z-index: 40;
-    display: flex;
+    /* 默认不显示：显隐完全由下面那条 :global 规则驱动（见模板里的说明） */
+    display: none;
     align-items: center;
     justify-content: center;
     /* scrim 就是"整页压暗"这个语义的令牌（--bg 的低透明度版本） */
     background: var(--scrim);
     pointer-events: none;
+  }
+
+  /* Wails 运行时在拖入时给 <main> 加 file-drop-target-active、离开时移除。
+     这个类名不出现在模板里，Svelte 的静态分析看不到它——不用 :global() 包住
+     就会被判成"未使用的选择器"并在编译期删掉，遮罩从此永不出现。 */
+  :global(main.file-drop-target-active) .drop-overlay {
+    display: flex;
   }
 
   .drop-card {

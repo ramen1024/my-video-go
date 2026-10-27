@@ -112,7 +112,7 @@ func TestResolveDroppedFolder(t *testing.T) {
 // 扩展名白名单只看名字：ResolveVideoPath 会跟随符号链接，于是
 // `link.mp4 -> 某个目录` 或指向命名管道的链接都能通过扩展名检查。
 // 扫描器本身不收录非普通文件，这条只拦手工构造的绑定调用——
-// 而绑定调用正是攻击面（前端 JS 可以直接调 window.go）。
+// 而绑定调用正是攻击面（前端 JS 可以直接 Call.ByName 调过来）。
 func TestIsRegularFile(t *testing.T) {
 	dir := t.TempDir()
 

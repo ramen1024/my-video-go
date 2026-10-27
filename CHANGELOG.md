@@ -4,6 +4,26 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **拖放高亮改由 Wails 运行时的类驱动**：删掉前端自己维护的 `isDragOver` /
+  `dragDepth` 与三个 `dragenter`/`dragleave`/`drop` 监听（约 20 行）。v3 在
+  dragover 时会给最近的投放区加 `file-drop-target-active`、离开时移除，
+  遮罩常驻 DOM、默认 `display: none`，显示规则交给一条 CSS。最终效果不变
+  （整页压暗 + "松手即扫描"卡片），但不再有两套"是否正在拖拽"的真相来源。
+
+### 清理
+
+- `.gitignore` 删掉 v2 CLI 的残留条目（`frontend/wailsjs/`、
+  `frontend/package.json.md5`）；`frontend/bindings/` 保留，用于兜住误跑
+  `wails3 generate bindings`。
+- 修正一批 v2 时代的注释：`wails build` → `wails3 build`、`window.go` →
+  `Call.ByName`、`wails.json` → `build/windows/info.json`，以及
+  `desktop_csp.go` 里"dev 模式会把 Middleware 置 nil"这条**在 v3 已不成立**的
+  理由（v3 是把窗口地址换成 Vite 开发服务器，页面根本不经过资产服务）。
+- `internal/player` 的包注释补上"v3.0.0 依然全量缓冲"的证据，避免有人把它
+  当成已过期的结论删掉。
+
 ## [0.6.0] - 2026-10-27
 
 ### 变更

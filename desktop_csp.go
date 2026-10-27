@@ -22,9 +22,9 @@ const loopbackMediaSrc = "media-src 'self' blob: http://127.0.0.1:*"
 // 差异因此收敛成一个常量替换，并由 desktop_csp_test.go 逐指令锁定。
 //
 // 与原 Tauri 版的对应关系：Tauri 侧由 tauri.conf.json 的 app.security.csp 提供，
-// 且有 csp_tests.rs 断言"浏览器侧不比桌面端更松"。Wails v2 **没有** CSP 配置项，
-// 因此改为在 assetserver.Middleware 里逐响应注入——不加的话桌面端完全没有 CSP，
-// 而浏览器端一直都有（见 internal/share/response.go）。
+// 且有 csp_tests.rs 断言"浏览器侧不比桌面端更松"。Wails（v2 与 v3.0.0 都）**没有**
+// CSP 配置项，因此改为在资产服务的 Middleware 里逐响应注入——不加的话桌面端完全没有
+// CSP，而浏览器端一直都有（见 internal/share/response.go）。
 //
 // media-src 为何必须放行回环：桌面端内联播放不走资产服务，而是
 // internal/player 的**回环 HTTP 服务器**（见该包注释：Wails 资产服务会把响应体
@@ -44,8 +44,11 @@ var desktopCSP = strings.Replace(
 // 文档再决定设不设"是脆弱的——assetHandler 在 WriteHeader 之前未必已经写好
 // Content-Type，一旦判断失手，**文档就静默失去保护**，与不加固毫无区别。
 //
-// 注意 wails dev（配置了 frontend:dev:serverUrl 时）会把 Middleware 置 nil
-// （见 Wails 的 internal/app/app_dev.go），因此本策略只在 wails build 产物生效。
+// **dev 模式下这条策略不起作用，但原因与 v2 不同**：v2 是 Wails 主动把
+// Middleware 置 nil（`internal/app/app_dev.go`），v3 不再这么做——它由
+// `assetserver.GetStartURL` 把窗口地址换成 Vite 开发服务器（`FRONTEND_DEVSERVER_URL`），
+// 页面**根本不经过资产服务**，中间件自然无从注入。两者结论相同（只在
+// `wails3 build` 的产物里生效），但别照着 v2 的说法去 v3 源码里找 nil 赋值。
 func desktopCSPMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Security-Policy", desktopCSP)

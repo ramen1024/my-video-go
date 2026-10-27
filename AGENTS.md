@@ -251,13 +251,35 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   - `data-file-drop-target` 是**文档契约**（"拖到带该属性的元素上才触发
     WindowFilesDropped"），挂在 `App.svelte` 的 `<main>` 上。v3.0.0 的实现其实
     不看它也能收到 drop，但按契约写才不会被后续版本改坏。
-  - 遮罩仍由前端自己的 `dragenter`/`dragleave` **进出计数**驱动（运行时加的
-    `file-drop-target-active` 只是个空类名，撑不起"当前的视频列表会被替换"
-    这句说明）；直接置 `false` 会疯狂闪烁，遮罩必须 `pointer-events: none`。
+  - 遮罩的显隐**由运行时加的类驱动，前端不再自己数进出**：dragover 时运行时给
+    最近的投放区加 `file-drop-target-active`、dragleave/drop 时移除，所以
+    `App.svelte` 里没有 `dragenter`/`dragleave` 监听，遮罩常驻 DOM、默认
+    `display: none`，靠 `:global(main.file-drop-target-active) .drop-overlay` 显示。
+    **那个类名不在模板里**，Svelte 的静态分析看不到——不用 `:global()` 包住会被
+    判成未使用选择器并在编译期删掉，遮罩从此永不出现（`grep -o
+    "file-drop-target-active[^{]*{" dist/assets/*.css` 可复核）。
+    v2 时代必须自己按进出**计数**（`dragleave` 逐层触发，直接置 false 会频闪）；
+    v3 把这件事收进运行时后，自己数反而会与框架打架。遮罩仍须
+    `pointer-events: none`——算可命中元素时它要不参与，否则会把下方的投放区挡掉。
   - **只接受文件夹**：拖入单个视频时最自然的语义是"打开这部片子"，而本应用以目录
     为单位扫描——替用户扫它所在的目录，等于把桌面上的一个电影文件变成扫描整个桌面
     （上万条目、几十秒读盘）。类型过滤在 Go 侧（`resolveDroppedFolder`）：前端拿到的
     只是路径字符串，判定"是不是目录"要问文件系统。
+- **这三处看着像"框架已经能替我们做，可以删"，但都不能删**（都核过 v3 源码）：
+  - `internal/player` 的回环 HTTP 服务器 + `GetVideoServerPort` + `videoSrc` 的
+    127.0.0.1 分支 + CSP 的 `media-src http://127.0.0.1:*` 例外。v3 的 Windows
+    资产服务**仍然全量缓冲**（`internal/assetserver/webview/responsewriter_windows.go`
+    的 `Write` 只往 `bytes.Buffer` 里累加，`Finish` 才交给 WebView2；该文件注释原文
+    是 "a streaming response cannot work on Windows today"）。删了大视频会无限转圈。
+  - `player_windows.go` 的 `openWithSystemPlayer`：v3 的 `Browser.OpenFile` 内部
+    就是同一个 `rundll32 url.dll,FileProtocolHandler`，但我们这份多了
+    `HideWindow` 与显式 `Process.Release()`。目前**没有实测证据**说明那两项是必需的
+    （PE 头查不了：安全策略按 LOLBin 拦），所以保留——要换成一行 `Browser.OpenFile`
+    的话，先手动点一次"用系统播放器打开"确认没有控制台闪窗。
+  - `fatal_windows.go` 的 MessageBoxW：`app.Dialog.Message()` 要走 `InvokeSync`，
+    依赖应用主循环；而 `showFatalError` 有一半的调用发生在 `application.New` **之前**
+    （建数据目录、初始化密码、`fs.Sub`），那时连 app 都没有。换成 v3 对话框会丢掉
+    "WebView2 起不来"这类最早、也最需要被看见的失败。
 - **桌面端扫描进度靠轮询 `GetScanProgress`，不是事件推送**：扫描跑在调用
   `ScanVideos` 的那个 goroutine 里，事件通道要额外维护订阅/退订，还要处理
   "扫描已结束、事件仍在路上"的竞态；250ms 一次的轮询与一次重绘同量级。

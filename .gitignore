@@ -39,12 +39,10 @@ Thumbs.db
 *.zip
 *.bak
 
-# Wails 绑定生成物（desktop.ts 用自声明的 AppBindings，不依赖生成代码）
-frontend/wailsjs/
+# Wails 绑定生成物：本仓库不生成也不提交（desktop.ts 用手写的 AppBindings +
+# Call.ByName）。留着这条只为兜住"有人误跑 wails3 generate bindings"——
+# 默认输出目录就是 frontend/bindings。
 frontend/bindings/
-
-# Wails CLI 本机状态
-frontend/package.json.md5
 
 # v3 的 syso（generate:syso 每次构建生成，用完即删）
 *.syso

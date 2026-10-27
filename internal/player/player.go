@@ -1,9 +1,11 @@
 // Package player 提供桌面端内联播放用的回环视频服务器。
 //
-// 为什么不走 Wails 资产服务：Wails v2 在 Windows 上会把资产服务的响应体
-// 完整缓冲进内存后才交给 WebView2（v2.16 pkg/assetserver/webview/
-// responsewriter_windows.go 的 PutByteContent），视频这类大文件会无限转圈
-// 甚至内存耗尽（见 wails#5047，v2 无开关可绕过）。因此桌面端播放改为请求
+// 为什么不走 Wails 资产服务：Wails 在 Windows 上会把资产服务的响应体
+// **完整缓冲进内存**后才交给 WebView2，视频这类大文件会无限转圈甚至内存耗尽
+// （v2 见 wails#5047；**v3.0.0 依然如此**——internal/assetserver/webview/
+// responsewriter_windows.go 的 Write 只是往 bytes.Buffer 里累加，Finish 才一次性
+// 交给 WebView2，该文件注释原文写着 "a streaming response cannot work on Windows
+// today, independently of anything WebView2 does"）。因此桌面端播放改为请求
 // 本机回环地址上的真 HTTP 服务器：
 //   - 绑定 127.0.0.1 随机端口：不触发 Windows 防火墙提示，多实例互不冲突；
 //   - 与网页端共用 share.VideoHandler：路径校验/扩展名白名单/Range 行为一致。

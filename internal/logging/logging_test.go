@@ -64,7 +64,7 @@ func (b *brokenWriter) Write(p []byte) (int, error) {
 // TestTeeWriterKeepsWritingAfterBrokenSink 是 H1 的回归护栏。
 //
 // 背景（真实缺陷）：日志 sink 曾是 `io.MultiWriter(os.Stdout, file)`。
-// `wails build` 产出的是 Windows **GUI 子系统**程序（PE Subsystem=2），
+// `wails3 build` 产出的是 Windows **GUI 子系统**程序（PE Subsystem=2），
 // 进程没有控制台，`os.Stdout` 句柄无效、每次写都返回
 // `The handle is invalid.`。`io.MultiWriter` 在遇到第一个非 nil 错误时
 // **立即返回**，因此**文件永远拿不到一个字节**——日志文件恒为 0 字节，

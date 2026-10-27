@@ -85,7 +85,7 @@ func (w *rotatingWriter) rotate() {
 // 无效的 os.Stdout）不影响其余 sink 继续收到内容。
 //
 // 为什么不能直接用 io.MultiWriter：它在遇到第一个非 nil 错误时**立即返回**，
-// 不会再写后面的 writer。本应用是 Windows GUI 子系统程序（`wails build` 产出
+// 不会再写后面的 writer。本应用是 Windows GUI 子系统程序（`wails3 build` 产出
 // PE Subsystem=2），进程没有控制台，`os.Stdout` 的句柄是无效的，每次写都返回
 // `The handle is invalid.`；于是 `io.MultiWriter(os.Stdout, file)` 会让**文件**
 // 永远拿不到一个字节——日志文件恒为 0 字节。这条路径在单元测试里看不出来：
