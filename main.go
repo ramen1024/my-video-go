@@ -144,13 +144,13 @@ func main() {
 	trayCtl := newTray(wailsApp, win, trayIcon, &quitting)
 	appSvc.onShareChange = trayCtl.setSharing
 
-	// 关窗口的语义交给共享状态决定（见 shouldHideOnClose 的设计不变量）。
+	// 关窗口一律收起到托盘（见 shouldHideOnClose；退出走托盘菜单）。
 	//
 	// 必须用 RegisterHook 而不是 OnWindowEvent：hook **同步**执行、能取消；
 	// listener 跑在各自的 goroutine 里，而框架自己的"关闭窗口"逻辑也是一个
 	// listener，靠取消标记在启动时自检——两者都注册成 listener 就成了竞态。
 	win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
-		if !shouldHideOnClose(appSvc.isSharing(), quitting.Load()) {
+		if !shouldHideOnClose(quitting.Load()) {
 			return
 		}
 		e.Cancel()

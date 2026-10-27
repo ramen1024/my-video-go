@@ -37,29 +37,18 @@ func TestTrayStatusLabel(t *testing.T) {
 	}
 }
 
-// 关窗口的语义：**关窗口不改变共享状态**。
+// 关窗口的语义：**一律隐藏，只有"正在退出"时放行**。
 //
-// 这条是托盘的整个设计支点，写成纯函数是为了能这样直接断言：
-//   - 共享开着 → 隐藏（关窗口的本意通常只是"收起来"，不该掐断家人的播放）
-//   - 共享没开 → 退出（用户就是想关掉，留后台只会让人去任务管理器）
-//   - 正在退出 → 放行（否则托盘"退出"会被自己拦成"藏起来"）
+// 这条曾经按"共享是否在运行"分流，被真实反馈推翻过一次：用户关窗口前没法
+// 预测这次是隐藏还是退出（它取决于一个与关窗口无关的状态），于是"托盘好像
+// 没生效"。现在 X 只有一个含义——收起来。
 func TestShouldHideOnClose(t *testing.T) {
-	cases := []struct {
-		name     string
-		sharing  bool
-		quitting bool
-		want     bool
-	}{
-		{"共享中、正常关窗 -> 隐藏", true, false, true},
-		{"未共享、正常关窗 -> 退出", false, false, false},
-		{"共享中但正在退出 -> 放行", true, true, false},
-		{"未共享且正在退出 -> 放行", false, true, false},
+	if !shouldHideOnClose(false) {
+		t.Error("正常关窗应当隐藏到托盘")
 	}
-
-	for _, c := range cases {
-		if got := shouldHideOnClose(c.sharing, c.quitting); got != c.want {
-			t.Errorf("%s：得到 %v，期望 %v", c.name, got, c.want)
-		}
+	if shouldHideOnClose(true) {
+		// 不放行的话，托盘「退出」会先撞上这条规则被拦成"藏起来"
+		t.Error("正在退出时不应再隐藏（否则退出变藏起来）")
 	}
 }
 

@@ -242,14 +242,6 @@ func (a *App) GetShareStatus() models.ShareStatus {
 	return a.st.ShareStatus()
 }
 
-// isSharing 报告共享服务器是否正在运行。
-//
-// 关窗口的语义据此决定（开着共享就隐藏到托盘，没开就退出）——见
-// shouldHideOnClose 的设计不变量。
-func (a *App) isSharing() bool {
-	return a.st.ShareStatus().Running
-}
-
 // notifyShare 把最新的共享信息推给托盘；info 为 nil 表示已停止。
 // onShareChange 未注入时（测试）是无人可见的空操作。
 func (a *App) notifyShare(info *models.ShareServerInfo) {

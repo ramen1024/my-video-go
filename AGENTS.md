@@ -265,10 +265,12 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
     为单位扫描——替用户扫它所在的目录，等于把桌面上的一个电影文件变成扫描整个桌面
     （上万条目、几十秒读盘）。类型过滤在 Go 侧（`resolveDroppedFolder`）：前端拿到的
     只是路径字符串，判定"是不是目录"要问文件系统。
-- **关窗口的语义由共享状态决定**（`tray.go` 的 `shouldHideOnClose`），不变量是
-  **"关窗口不改变共享状态"**：共享开着 → 隐藏到托盘、共享继续；共享没开 → 正常退出。
-  这条比"永远隐藏"或"永远退出"都干净，也顺手解决了"进程占着端口却没人知道"——
-  托盘图标**从启动起就在**（不是隐藏那一刻才冒出来），tooltip 还写着"共享中"。
+- **关窗口一律收起到托盘**（`tray.go` 的 `shouldHideOnClose`），只有托盘菜单的
+  「退出」才结束进程。托盘图标**从启动起就在**，tooltip 显示当前是否在共享。
+  - **这条被真实反馈推翻过一次，别再"优化"回去**：最初的实现按共享状态分流
+    （共享开着才隐藏，没开就退出），理由是"不想留看不懂的后台进程"。问题是关窗口
+    的行为取决于一个**与关窗口无关的状态**——用户关之前没法预测这次是隐藏还是
+    退出，实际表现就是"托盘功能好像没生效"。可预测性比"少一个后台进程"重要。
   - **必须用 `win.RegisterHook(WindowClosing, …)` 而不是 `OnWindowEvent`**：hook
     在 `HandleWindowEvent` 里**同步**执行且能被 `e.Cancel()` 中断；`OnWindowEvent`
     注册的是 listener，跑在各自的 goroutine 里（`go func(){...}`），而框架自己
@@ -276,10 +278,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
     生效。官方 `examples/systray-basic` 用的正是 hook + `e.Cancel()` + `Hide()`。
   - 托盘"退出"必须先置 `quitting` 再 `app.Quit()`：否则退出流程会先触发
     WindowClosing，被上面那条规则拦成"隐藏"，于是**退出变成藏起来**。
-  - 托盘图标传**改过的 ICO 字节**（`//go:embed build/windows/icon.ico`）：Windows 侧
+  - 托盘图标传 ICO 字节（`//go:embed build/windows/icon.ico`）：Windows 侧
     `w32.iconResourceData` 会按 `SM_CXSMICON` 从多尺寸 ICO 里挑最合适的一张；
-    传 PNG 则是原图直接当图标、由系统缩到 16px，糊。这也顺带给
-    `build/appicon.png` 之前"没人用"的疑问一个答案——托盘用 ico，不用它。
+    传 PNG 则是原图直接当图标、由系统缩到 16px，糊。这也是 `build/appicon.png`
+    的真实用途分界——托盘不要它。
   - 菜单**刻意不放"停止共享"**：共享只有一个控制入口（窗口里的按钮）。加进托盘就要
     再补一套"窗口状态与托盘不一致"的同步（事件通道 + 前端订阅），而成本换来的只是
     少点一下。状态项是只读的（"共享中：http://IP:端口"），未共享时整项隐藏而不是
