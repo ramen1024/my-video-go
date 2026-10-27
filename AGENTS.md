@@ -29,37 +29,33 @@ CI（`.github/workflows/ci.yml`）在 `windows-latest` 上运行：`pnpm install
 `GITHUB_REF_NAME` 与 `build/windows/info.json` 的 `ProductVersion` 一致——**不要**只把
 检查留在 ci.yml：release 曾经只 build 不检查，红灯提交照样能发出去。
 
-`mirror.yml`（推 `master` 或 `v*` tag 触发）把代码镜像到 Gitee，给打不开 GitHub 的
-国内用户一条路。**单向**：Gitee 侧是只读副本，直接在 Gitee 上提交或开分支，会被下一次
-force push 覆盖；Issue/PR 也不搬。
+`Gitee`（https://gitee.com/my_little_world/my-video-go）是只读镜像，给打不开 GitHub 的
+国内用户一条路。**代码同步不在仓库里**：走 Gitee 的「仓库镜像管理」（Pull 方向、勾了
+「自动从 GitHub 同步」），GitHub 侧的 push webhook（`…/sync_tasks/callback`）通知
+Gitee 来拉，分支/标签/提交自动跟。仓库里**不要**再加 push-to-Gitee 的动作——两套机制
+同时写一个仓库会互相踩（一个 force push、一个整仓覆盖）。Issue/PR 一样不搬，
+改动请在 GitHub 上做。
 
-- **不能指望 Gitee 自己来拉**：Gitee 的「仓库镜像管理」是申请制（只对 GVP / 推荐项目
-  开通），网页端「导入已有仓库」只搬一次。所以同步只能由触发端 push 过去
-- 推的是 `refs/remotes/origin/*` + `refs/tags/*`，**不是** `git push --mirror`——后者会把
-  `origin/master` 这类远端跟踪引用也推成 Gitee 上的真分支。checkout 在推 tag 时是
-  detached 检出，故 workflow 里先显式 `git fetch` 补齐远端分支引用，否则通配 refspec
-  匹配不到任何东西、push 直接报错；顺手 `git remote set-head origin --delete`，
-  否则 `refs/remotes/origin/HEAD` 会匹配通配符、在 Gitee 上变成一条名叫 `HEAD` 的分支
-- **不加 `--prune`**：Gitee 新仓库若以 `main` 为默认分支，prune 会去删它、远端报
-  `refusing to delete the current branch`，**整条 push 全灭**（本地实测）。单分支仓库
-  prune 的收益为零；真在 GitHub 删了分支就手动 `git push gitee --delete <分支>`
-- 镜像目标是**字面量**，不用 repo variables：Actions 的 workflow 之间无法共享变量，
-  而 `vars.GITEE_OWNER` 写错了本地看不出来、CI 也断言不到。改成两处 `env` 之后由
-  `check-config-sync.mjs` 比对四处——**改仓库要同时动** `mirror.yml`(job env)、
-  `release.yml`(step env)、`README.md` 下载节、`App.svelte` 的 `MIRROR_URL`，
-  漏一处就红灯（漂移的症状是镜像推到 A 仓库、文档指向 B 仓库，用户 404 而 CI 全绿）
-- 唯一的密钥是 secret `GITEE_TOKEN`（Gitee 私人令牌，勾 `projects`）。令牌是**账号级**
-  的，没法只授权单个仓库——泄露等于整个 Gitee 账号的写权限，要立刻吊销
-- **首次配置（只做一次）**：Gitee 建仓库时**别**初始化 README，默认分支留 `master`
-  （若成了 `main`，要到仓库设置里把默认分支改成 `master`，否则首页停在一条没有代码的
-  分支上——镜像只推 `master`，不会去动 `main`）→ 生成私人令牌勾 `projects` →
-  GitHub 侧 Secrets 加 `GITEE_TOKEN` → 在 Actions 里手动跑一次 `Mirror` 做首次全量
-- **产物镜像在 `release.yml` 末尾**（建 Gitee 发行版 + 上传 exe），带 `continue-on-error`：
-  Gitee 抖动不该让 GitHub 的发版变红（tag 已经推出去了，判失败只会让人重跑一次已经成功
-  的构建）。重跑时复用已有发行版与同名附件，不会堆出 `file_1.exe`
-- 兜底：Actions 从境外节点推 Gitee 偶发风控，本机执行同一条 push 即可
-  （`git remote add gitee https://gitee.com/<owner>/<repo>.git` +
-  `git push --force gitee "refs/heads/*:refs/heads/*" "refs/tags/*:refs/tags/*"`）
+- Gitee 侧的失败**看不见**：连续 5 次同步失败会被强制停止，状态只在
+  `gitee.com/<owner>/<repo>/mirrors` 页面里。发现代码没跟上的第一件事是去那里看
+- **Release 不在镜像范围内**（镜像只搬 git 对象：分支/标签/提交；发行版是平台的
+  库外数据，git 协议里没有这个概念）。exe 由 `release.yml` 末尾经 OpenAPI v5 传到
+  Gitee 发行版（建版 + `attach_files`），带 `continue-on-error`：Gitee 抖动不该让
+  GitHub 的发版变红（tag 已经推出去了，判失败只会让人重跑一次已经成功的构建）。
+  重跑幂等：发行版已存在就复用、同名附件跳过，不会堆出 `file_1.exe`
+- 发行版目标写的是**字面量**（`release.yml` 的 step env），不用 repo variables：
+  `vars.GITEE_OWNER` 写错了本地看不出来、CI 也断言不到。由 `check-config-sync.mjs`
+  比对**三处**——`release.yml`(step env)、`README.md` 下载节、`App.svelte` 的
+  `MIRROR_URL`，改仓库要同时动这三处，漏一处就红灯（漂移的症状是 exe 传到 A 仓库、
+  文档指向 B 仓库，用户 404 而 CI 全绿）
+- 密钥是 secret `GITEE_TOKEN`（Gitee 私人令牌，勾 `projects`），只在发版时传附件用。
+  令牌是**账号级**的，没法只授权单个仓库——泄露等于整个 Gitee 账号的写权限，要立刻
+  吊销
+- 历史教训（Actions 主动推的方案 2026-10-27 当天启用又弃用，被原生镜像取代；哪天要
+  回到主动推，这几条会再咬人）：`git push --mirror` 会把 `refs/remotes/origin/*`
+  推成 Gitee 上的伪分支，必须用显式 refspec 并先 `git remote set-head origin
+  --delete`；`--prune` 遇到 Gitee 默认分支是 `main` 时会因
+  `refusing to delete the current branch` 让**整条 push 全灭**，单分支仓库别加 prune
 
 ## Architecture
 
@@ -438,9 +434,9 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   `build/windows/info.json` 的 `ProductVersion` 取值、用 `define` 替换
   `__APP_VERSION__`（读不到或不是 `x.y.z` 直接让构建失败）；
   不要在 `.svelte` 里手写版本字符串
-  打 tag 即触发 `.github/workflows/release.yml` 构建并创建 Release，同时
-  `mirror.yml` 把 `master` 与 tag 推到 Gitee、release 末尾再把 exe 传进 Gitee 的
-  同名发行版（两处都是自动的，见上文 mirror.yml 一节）；
+  打 tag 即触发 `.github/workflows/release.yml` 构建并创建 Release；代码由 Gitee 的
+  原生 Pull 镜像跟（webhook 自动），release 末尾再把 exe 传进 Gitee 的同名发行版
+  （见上文 Gitee 一节）；
   已发布过的 tag 不要原地重打（附件与已下载的人会对不上）
 - **发版顺序：先推 `master`，等 CI 在那个 commit 上全绿，最后才推 tag**。
   不要先推 tag 再等构建——tag 一旦推出去就**收不回来**了（见下条的 ruleset），

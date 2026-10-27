@@ -402,11 +402,12 @@ if (changelogVersion !== infoVersion) {
 
 const productVersion = infoVersion;
 
-// ---------- 5. Gitee 镜像地址：两个 workflow / README / 页脚四处一致 ----------
+// ---------- 5. Gitee 发行版目标：release.yml / README / 页脚三处一致 ----------
 
-// 镜像目标在两个 workflow 里各写一份 env（Actions 的 workflow 之间无法共享变量），
-// README 的下载节与 App.svelte 的页脚又各有一个可点地址。漂移的症状是"镜像推到 A
-// 仓库、文档与页脚指向 B 仓库"——用户点开 404，而 CI 与发版全绿，最难发现的那类错。
+// 代码同步走 Gitee 原生 Pull 镜像（不在仓库里 push），仓库内剩下的 Gitee 地址只有
+// 一个用途：release.yml 末尾把 exe 传到 Gitee 发行版。README 的下载节与 App.svelte
+// 的页脚又各有一个可点地址。漂移的症状是"exe 传到 A 仓库、文档与页脚指向 B 仓库"
+// ——用户点开 404，而 CI 与发版全绿，最难发现的那类错。
 const giteeUrlTarget = (source, where) => {
   const m = source.match(/https:\/\/gitee\.com\/([\w.-]+)\/([\w.-]+)/);
   if (!m) fail(`${where} 中找不到 https://gitee.com/<owner>/<repo> 形式的地址`);
@@ -424,7 +425,6 @@ const workflowTarget = (source, where) => {
 
 const readmeMd = readFileSync(join(root, "README.md"), "utf8");
 const giteeTargets = [
-  [".github/workflows/mirror.yml", ".github/workflows/mirror.yml"],
   [".github/workflows/release.yml", ".github/workflows/release.yml"],
 ].map(([rel, where]) => [
   where,
@@ -445,5 +445,5 @@ console.log(
     `绑定方法 ${goBindings.size} 个两侧一致，事件名 ${eventNames.length} 个两侧一致，` +
     `端口/体积常量与 docs/api.md 复述一致，` +
     `IP 缓存 TTL 单一来源，预涂底色 ${bgHex} 三处一致，版本号 v${productVersion} 四处一致，` +
-    `Gitee 镜像 ${giteePath} 四处一致`,
+    `Gitee 发行版目标 ${giteePath} 三处一致`,
 );

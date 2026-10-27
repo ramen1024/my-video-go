@@ -109,8 +109,8 @@ jobs:
             --generate-notes `
             $env:ASSET
 
-      # 国内用户下载 exe 需要绕开 GitHub，所以 Gitee 侧也建一份发行版（代码镜像由
-      # mirror.yml 负责，这里只补二进制）。
+      # 国内用户下载 exe 需要绕开 GitHub，所以 Gitee 侧也建一份发行版（代码同步由
+      # Gitee 原生 Pull 镜像负责，这里只补二进制——镜像不搬 Release，见 AGENTS.md）。
       #
       # continue-on-error：Gitee 是镜像，它抖一下不该让 GitHub 的发版变红——tag 已经
       # 推出去了，把整条 workflow 判失败只会让人以为构建挂了。代价是这一步失败时只在
@@ -123,7 +123,8 @@ jobs:
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          # 与 mirror.yml 的 env 同步改（check-config-sync.mjs 断言四处一致）
+          # 与 README 下载节、App.svelte 页脚的 Gitee 地址保持一致
+          # （check-config-sync.mjs 断言三处一致）
           GITEE_OWNER: my_little_world
           GITEE_REPO: my-video-go
           GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
