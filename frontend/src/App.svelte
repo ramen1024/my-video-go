@@ -524,10 +524,19 @@
   ondrop={handleWindowDrop}
 />
 
-<main class="app">
+<!--
+  data-file-drop-target：Wails v3 的**文档契约**——文件被拖到带该属性的元素上时
+  才会触发窗口的 WindowFilesDropped 事件（Go 侧据此判目录再推给前端）。
+
+  高亮仍由上面的进出计数驱动、用自己那张"松手即扫描"的卡片，而不是运行时加的
+  file-drop-target-active 类：后者只有一个空类名，而这个遮罩要说明"当前的视频
+  列表会被替换"——第一次拖入时用户并不知道会发生什么。
+  属性与遮罩各管一件事，不冲突。
+-->
+<main class="app" data-file-drop-target>
   {#if isDragOver}
     <!--
-      拖拽遮罩：纯视觉反馈，drop 本身由平台层（Wails 运行时）处理。
+      拖拽遮罩：纯视觉反馈，drop 本身由 Go 侧的 WindowFilesDropped 处理。
       aria-hidden：它没有可操作内容，读屏器念一遍"松手即扫描"只会打断当前上下文。
     -->
     <div class="drop-overlay" aria-hidden="true">

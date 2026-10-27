@@ -1,15 +1,15 @@
 {
 	"fixed": {
-		"file_version": "{{.Info.ProductVersion}}"
+		"file_version": "0.5.1"
 	},
 	"info": {
-		"0000": {
-			"ProductVersion": "{{.Info.ProductVersion}}",
-			"CompanyName": "{{.Info.CompanyName}}",
-			"FileDescription": "{{.Info.ProductName}}",
-			"LegalCopyright": "{{.Info.Copyright}}",
-			"ProductName": "{{.Info.ProductName}}",
-			"Comments": "{{.Info.Comments}}"
+		"0409": {
+			"ProductVersion": "0.5.1",
+			"CompanyName": "ramen1024",
+			"FileDescription": "视频扫描器",
+			"LegalCopyright": "Copyright © 2026",
+			"ProductName": "视频扫描器",
+			"Comments": "扫描本地视频文件夹并在局域网内共享播放"
 		}
 	}
 }

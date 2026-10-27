@@ -117,18 +117,18 @@
 <details>
 <summary><b>构建与开发</b>（点开）</summary>
 
-依赖：Go 1.27+、Node 22+、pnpm 11、[Wails v2 CLI](https://wails.io)、WebView2 运行时
+依赖：Go 1.27+、Node 22+、pnpm 11、[Wails v3 CLI](https://v3.wails.io)、WebView2 运行时
 （Windows 11 自带）。Go 版本以 `go.mod` 为准。
 
 ```bash
-# 安装 Wails CLI（钉在与 go.mod/CI 相同的 v2.16.0，避免 CLI 生成的工程结构漂移）
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+# 安装 Wails v3 CLI（钉在与 go.mod/CI 相同的 v3.0.0，避免 CLI 与库版本错配）
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
 
 # 开发（前端热重载 + Go 重编译）
-wails dev
+wails3 dev
 
-# 构建产物（frontend/dist + 根目录可执行文件）
-wails build
+# 构建产物（先构建 frontend/dist，再产出 build/bin/视频扫描器.exe）
+wails3 build
 
 # 只构建前端（改样式 / 组件后想让网页端生效时）
 cd frontend && pnpm install && pnpm build
@@ -138,20 +138,21 @@ cd frontend && pnpm check        # svelte-check + 跨文件一致性断言
 go vet ./... && go test ./...    # 后端测试（含 HTTP 契约测试）
 ```
 
-`wails build` 产出 `build/bin/视频扫描器.exe`，可执行文件即绿色版，无需安装。
+`wails3 build` 产出 `build/bin/视频扫描器.exe`，可执行文件即绿色版，无需安装。
+构建流程写在 `Taskfile.yml`（v3 用 Taskfile 取代了 v2 的 `wails.json`）。
 
 </details>
 
 <details>
 <summary><b>架构速览</b>（点开）</summary>
 
-Go + Wails v2 桌面应用 + Svelte 5（纯 Vite，无 SvelteKit）。只有一份前端构建产物：
-桌面端由 Wails 资产服务加载（经 `window.go.main.App.*` 调 Go 绑定），网页端由内嵌
-HTTP 服务器发给局域网浏览器（数据走 `/videos` 等 JSON 接口）。两端的差异全部收敛在
-`frontend/src/lib/platform/` 环境抽象层，组件只依赖统一的接口与能力标志。
+Go + Wails v3 桌面应用 + Svelte 5（纯 Vite，无 SvelteKit）。只有一份前端构建产物：
+桌面端由 Wails 资产服务加载（经 `Call.ByName("main.App.<方法>")` 调 Go 服务），网页端
+由内嵌 HTTP 服务器发给局域网浏览器（数据走 `/videos` 等 JSON 接口）。两端的差异全部
+收敛在 `frontend/src/lib/platform/` 环境抽象层，组件只依赖统一的接口与能力标志。
 
 ```
-main.go / app.go           Wails 应用与绑定方法集（window.go.main.App.*）
+main.go / app.go           Wails 应用与绑定方法集（Call.ByName "main.App.*"）
 internal/
   ├── scanner/             目录扫描（扩展名白名单、1MiB 报告制过滤、取消）
   ├── password/            Argon2id、session、IP 限流、配置持久化

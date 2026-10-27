@@ -1,0 +1,57 @@
+# 项目配置（Wails v3 用 build/config.yml 取代 v2 的 wails.json）。
+#
+# `info` 供 wails3 package / 各平台打包元数据使用；**exe 的版本资源不在这里**，
+# 而是 build/windows/info.json（由 generate:syso 直接读走）。两者都由
+# scripts/check-config-sync.mjs 断言与 frontend/package.json、CHANGELOG 一致，
+# 所以不会有哪一份悄悄落后。
+#
+# 不要执行 `wails3 task common:update:build-assets`：它会把整个 build/ 目录
+# 按模板重写一遍（图标、manifest、nsis 脚本全部覆盖）。本仓库只保留了构建
+# 真正用到的几个文件，手改比生成更可控。
+version: '3'
+
+info:
+  companyName: "ramen1024"
+  productName: "视频扫描器"
+  productIdentifier: "com.ramen1024.video-scanner"
+  description: "扫描本地视频文件夹并在局域网内共享播放"
+  copyright: "Copyright © 2026"
+  comments: "扫描本地视频文件夹并在局域网内共享播放"
+  version: "0.5.1"
+
+# 开发模式：wails3 dev -config ./build/config.yml
+#
+# 三段 executes 是 Wails v3 的开发期约定，顺序不能换：
+#   1. blocking  —— 先编译出一份带 dev 标签的二进制（改动后重新编译）
+#   2. background—— 起 Vite 开发服务器；`wails3 dev -port` 会设置
+#      FRONTEND_DEVSERVER_URL，Go 侧据此改为从 Vite 取页面（热重载来源）
+#   3. primary   —— 启动应用，它退出即整体退出
+#
+# 注意 watch 掉 frontend/ 整个目录：前端由 Vite 自己热重载，让 Go 侧的文件
+# 监听器也盯着它只会导致"改一行 TS 就重新编译一次二进制"。
+dev_mode:
+  root_path: .
+  log_level: warn
+  debounce: 1000
+  ignore:
+    dir:
+      - .git
+      - node_modules
+      - frontend
+      - build/bin
+    file:
+      - .DS_Store
+      - .gitignore
+      - .gitkeep
+      - "*_test.go"
+    watched_extension:
+      - "*.go"
+    git_ignore: true
+  executes:
+    - cmd: wails3 build DEV=true
+      type: blocking
+    - cmd: wails3 task common:dev:frontend
+      type: background
+    - cmd: wails3 task run
+      type: primary
+      exit_policy: shutdown

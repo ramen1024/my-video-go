@@ -4,40 +4,40 @@
 
 | Action | Command |
 |--------|---------|
-| Dev (全栈, 前端热重载) | `wails dev` |
+| Dev (全栈, 前端热重载) | `wails3 dev` |
 | Dev (仅前端, 网页端桩) | `cd frontend && pnpm dev`（需另起后端，见下） |
 | Dev (网页端离线预览, 推荐) | `go run ./cmd/webpreview -dir frontend/dist [视频文件夹]` |
 | Type check + 一致性校验 | `cd frontend && pnpm check` |
 | 前端构建（含产物校验） | `cd frontend && pnpm build` |
-| 构建应用 | `wails build`（产出 `build/bin/视频扫描器.exe`） |
+| 构建应用 | `wails3 build`（产出 `build/bin/视频扫描器.exe`） |
 | Go check | `go vet ./...` |
 | Go test（CI 同款，含竞争检测） | `go test -race ./...` |
 | Go format | `gofmt -w .` |
-| 发版（**必须等 CI 绿再推 tag**） | 改三处版本号 → 推 `master` → 等 CI → `git push origin v<x.y.z>` |
+| 发版（**必须等 CI 绿再推 tag**） | 改四处版本号 → 推 `master` → 等 CI → `git push origin v<x.y.z>` |
 
 `pnpm dev` 已把 `/videos`、`/video`、`/refresh`、`/refresh-status`、`/auth`、`/login`
 代理到 `127.0.0.1:6010`（`cmd/webpreview` 的默认端口），因此**另起一个后端**即可获得
 完整功能的前端热重载；两边的端口要对应（`vite.config.ts` 里的 `BACKEND`）。
 
 CI（`.github/workflows/ci.yml`）在 `windows-latest` 上运行：`pnpm install --frozen-lockfile`
-→ `pnpm check` → `pnpm build` → gofmt 检查 → `go vet` → `go test -race` → `wails build`
+→ `pnpm check` → `pnpm build` → gofmt 检查 → `go vet` → `go test -race` → `wails3 build`
 （只跑 `-race`，它是普通 `go test` 的超集）。
-**`wails build` 必须在 `pnpm build` 之后**（`go:embed all:frontend/dist` 要求 dist 存在产物；
+**`wails3 build` 必须在 `pnpm build` 之后**（`go:embed all:frontend/dist` 要求 dist 存在产物；
 仓库里提交的 `frontend/dist/.gitkeep` 只是为了让 go.mod 能通过编译）。
 
 `release.yml`（打 tag 触发）跑的是同一套 check/vet/test 门槛，另外校验
-`GITHUB_REF_NAME` 与 `wails.json` 的 `productVersion` 一致——**不要**只把检查留在
-ci.yml：release 曾经只 build 不检查，红灯提交照样能发出去。
+`GITHUB_REF_NAME` 与 `build/windows/info.json` 的 `ProductVersion` 一致——**不要**只把
+检查留在 ci.yml：release 曾经只 build 不检查，红灯提交照样能发出去。
 
 ## Architecture
 
-Tauri 2 + Rust 版（my-video-tauri）的同功能 Go 重写版：Go + Wails v2 桌面应用 +
-Svelte 5（纯 Vite，无 SvelteKit）前端。
+Tauri 2 + Rust 版（my-video-tauri）的同功能 Go 重写版：Go + Wails **v3**
+（v3.0.0）桌面应用 + Svelte 5（纯 Vite，无 SvelteKit）前端。
 
 **只有一份前端。** 桌面端（Wails webview）与网页端（局域网浏览器）跑同一个
 Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 
-- 桌面端由 Wails 资产服务加载，前端经 `window.go.main.App.*` 调 Go 绑定方法；
+- 桌面端由 Wails 资产服务加载，前端经 `Call.ByName("main.App.<方法>")` 调 Go 服务方法；
 - 网页端由内嵌 HTTP 服务器（`internal/share`）把同一份产物发给浏览器，
   数据走 `/videos` 等 JSON 接口。
 
@@ -48,10 +48,11 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 | `platform/types.ts` | `Platform` 接口与统一的 `VideoItem` 模型、能力标志 |
 | `platform/desktop.ts` | Wails 绑定实现（`AppBindings` 接口与 app.go 一一对应） |
 | `platform/web.ts` | HTTP 实现（ETag 轮询、`/refresh` + `/refresh-status`、`/video/*`） |
-| `platform/index.ts` | 依据 `window.go` 选择实现并导出单例 |
+| `platform/index.ts` | 依据 URL 上的 `?desktop=1` 选择实现并导出单例 |
 
 组件只依赖 `platform` 与能力标志（`canPickFolder` / `canShare` / `canCancelScan` /
-`canOpenWithSystemPlayer` / `listPollIntervalMs`），不得直接调 `window.go` 或判断运行环境。
+`canOpenWithSystemPlayer` / `listPollIntervalMs`），不得直接调 `Call.ByName`
+或判断运行环境。
 
 ## Backend (`internal/`)
 
@@ -136,7 +137,7 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - `logging/` — slog 输出（数据目录文件 + **句柄有效时**的控制台）。定位是
   **事故记录**而不是行为审计：正常路径（扫描完成、共享启停）**不写日志**，
   只有启动失败、服务器异常退出、密码配置被重置/保存失败这类事件才记。
-  **必须用 `teeWriter` 而不是 `io.MultiWriter`**：`wails build` 产出的是
+  **必须用 `teeWriter` 而不是 `io.MultiWriter`**：`wails3 build` 产出的是
   Windows GUI 子系统程序（PE Subsystem=2），进程没有控制台，`os.Stdout`
   句柄无效、每次写都返回 `The handle is invalid.`，而 `io.MultiWriter` 遇到
   第一个错误就**短路**，会让**日志文件永远拿不到一个字节**（实测 log 恒为
@@ -147,9 +148,16 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   且没有时间戳、不进轮转文件
 
 **新增一个绑定方法的步骤：**
-1. 在 `app.go` 加导出方法（错误用 `apperr`，`Error()` 文案即前端看到的内容）
-2. 在 `frontend/src/lib/platform/desktop.ts` 的 `AppBindings` 接口加同签名方法
+1. 在 `app.go` 给 `App` 加**导出**方法（错误用 `apperr`，`Error()` 文案即前端看到的内容）。
+   v3 按服务注册，方法名自动进 `main.App.<方法>`，不需要额外注册代码
+2. 在 `frontend/src/lib/platform/desktop.ts` 的 `AppBindings` 接口加同签名方法，
+   并在 `desktop` 对象里用 `call<T>("方法名", …)` 接线（**漏了第 2 步前端调不到**，
+   `check-config-sync.mjs` 会拦）
 3. 需要暴露给网页端时，同步 `internal/share` 的路由与 `docs/api.md`
+
+**新增一个桌面端事件（Go → 前端）的步骤：** 在 `app.go` 的常量块加事件名 →
+`main.go` 里 `Event.Emit` → `desktop.ts` 里 `Events.On` 订阅。
+事件名是跨语言契约，`check-config-sync.mjs` 断言 Go 侧常量值都出现在 desktop.ts 里。
 
 **新增一个 HTTP 端点的步骤：** `internal/share/server.go` 注册路由 + handler；
 `docs/api.md` 补契约；`server_test.go` 补测试。**若响应体足够大且会被反复拉取**
@@ -160,13 +168,22 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 
 ## Quirks
 
-- **wails CLI 是开发/构建的必需品**（`wails dev` / `wails build`），但仓库不提交任何
-  `wailsjs/` 生成物：`desktop.ts` 直接声明 `AppBindings` 接口并经 `window.go` 调用，
-  `pnpm check` 无需 wails CLI。改 Go 方法签名后**没有**自动同步，必须手改
-  `AppBindings`。注意 `AppBindings` 是 `desktop.ts` 里自声明的局部接口，与 `app.go`
-  之间**没有**任何机器可查的联系——svelte-check **抓不到**漏改（改名后 TS 照样编译
-  通过，只在运行时炸），因此 `scripts/check-config-sync.mjs` 里加了一条
-  `app.go` ↔ `AppBindings` 的方法名/参数个数断言来兜住
+- **wails3 CLI 是开发/构建的必需品**（`wails3 dev` / `wails3 build`），但仓库不提交任何
+  生成物绑定：`desktop.ts` 直接声明 `AppBindings` 接口并经 `Call.ByName` 调用，
+  `pnpm check` 无需 wails3 CLI。v3 的绑定单位是**服务**，全限定名由 Wails 按
+  `reflect PkgPath + 类型名 + 方法名` 拼出——`package main` 在**编译后的二进制**里
+  PkgPath 是字面量 `main`，所以是 `main.App.<方法>`（`TestBindingServiceNameMatchesFrontend`
+  把 Go 侧算出的名字与 desktop.ts 的 `SERVICE` 常量拉到一起比对）。
+  **注意"测试进程 ≠ 二进制"这个反直觉之处**：`go test` 里 main 包的 PkgPath 是模块路径
+  `my-video-go`，照着测试里打印的值去改前端反而会全盘调不通——实测方式见该测试的注释。
+  改 Go 方法签名后**没有**自动同步，必须手改 `AppBindings`；svelte-check **抓不到**漏改
+  （改名后 TS 照样编译通过，只在运行时炸），因此 `scripts/check-config-sync.mjs` 里
+  有 `app.go` ↔ `AppBindings` 的方法名/参数个数断言，以及 Go 事件名 ↔ 前端订阅的断言
+- **前端运行时是 `@wailsio/runtime`，必须动态 import**：`desktop.ts` 里 `import(...)`
+  而不是顶层 `import`。该模块被求值时会立刻在 `document` 上挂右键菜单与拖放监听——
+  桌面端与网页端是同一份产物，顶层引入会让局域网里用手机看片的人失去浏览器右键菜单、
+  且把文件拖进页面不再有任何默认行为。Vite 会把它拆成独立 chunk，网页端根本不下载
+  （`dist/index.html` 只引用入口 chunk，入口再 `import()` 它与 qrcode）
 - `frontend/public/.gitkeep` 与 `frontend/dist/.gitkeep` 都是有意的：`go:embed
   all:frontend/dist` 在 dist 不存在时编译失败；而 Vite 的 `emptyOutDir` 每次构建都会
   清空 dist，dist 里的 `.gitkeep` 正是靠 `publicDir` 拷贝机制在每次构建后原样回来
@@ -200,8 +217,8 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   提示条上的关闭按钮渲染成系统默认按钮）。全局规则直接写普通选择器；
   产物里可以用 `grep -o ":global[^{]*{" dist/assets/*.css` 复核（应为空）
 - **exe 版本资源里的字符串在 .NET 侧读不到，但资源本身是对的——不要试图改
-  `build/windows/info.json`**。该文件经 Wails 渲染后由 `winres v0.3.1` 写进
-  `-res.syso`，用 Win32 的 `VerQueryValue` 或 WMI 验证，`FileVersion` 与
+  `build/windows/info.json`**。该文件由 `wails3 generate syso` 经 `winres v0.3.1`
+  写进 syso，用 Win32 的 `VerQueryValue` 或 WMI 验证，`FileVersion` 与
   ProductName / CompanyName / Copyright 全部存在且正确：
   `Get-CimInstance CIM_DataFile -Filter "Name='…'"` 能读到 `Version`（0.5.1.0）
   与 `Manufacturer`（= CompanyName），资源管理器"属性 → 详细信息"走的也是这套
@@ -210,41 +227,54 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   四种写法都试过（语言键 `0000` / `0409` / `0804`、以及去掉模板的纯字面量），
   .NET 一侧全空、CIM 一侧全对——改配置无解。要修只能换 Wails 版本或自定义
   syso，收益与成本不成比例，别把它当成本项目的 bug 去调。
-  `CompanyName` 由 `wails.json` 的 `info.companyName` 提供（当前是 `ramen1024`）；
-  不配的话 Wails 用项目名兜底，属性里显示的是技术名 `my-video-go`。
+  **v3 的 info.json 是字面量、不是 Go 模板**：v2 的 `wails build` 会用项目数据渲染
+  `{{.Info.*}}` 占位符，`wails3 generate syso` 只把文件当 JSON 解析（见
+  `internal/commands/syso.go` 里直接 `version.Info.UnmarshalJSON`），留着占位符会让
+  版本资源里躺着一串 `{{.Info.ProductVersion}}`。版本号因此在这里出现一次，
+  与 `build/config.yml` 的 `info.version` 由 `check-config-sync.mjs` 锁死一致。
 - 浏览器端 CSP（`internal/share/response.go` 的 `BrowserCSP`）依赖**"Vite 产物没有内联
   script"**这一前提，所以是 `script-src 'self'` 而无需 nonce；`scripts/check-web-build.mjs`
   会断言产物无内联脚本。若升级构建工具后产物出现内联脚本，白屏会在运行时才暴露——
   改 CSP 的同时必须同步该检查。既是常量也是**桌面端策略的派生源**（见下条），
   因此导出——改名时要一起看 `desktop_csp.go`
-- **拖放文件夹必须由前端调用 `window.runtime.OnFileDrop`**：Go 侧的
-  `runtime.OnFileDrop` 只订阅 `wails:file-drop` 事件，真正把 WebView2 解析出的
-  绝对路径发出来的是 JS 侧在 `window.runtime.OnFileDrop()` 被调用后才挂上的
-  dragover/drop 监听器。只写 Go 侧会表现为"拖放看着接了、永远收不到"。
-  `main.go` 只开 `DragAndDrop.EnableFileDrop`，**绝不能同时开
-  `DisableWebViewDrop`**：后者对应 WebView2 的 `PutAllowExternalDrop(false)`，
-  会把外部拖放整个关掉（JS 连 dragover/drop 都收不到），与 `EnableFileDrop`
-  是互斥方案而不是"双保险"。防止拖入 `.mp4` 时 webview 就地导航的，是 Wails
-  运行时在 dragover/drop 上的 `preventDefault`（同样依赖前端调用 OnFileDrop）。
-  `OnFileDrop` 的 JS 实现带 `registered` 标志、**只能注册一次**，所以
-  `desktop.ts` 常驻一份注册、按"当前订阅者"转发。
-  **只接受文件夹**：拖入单个视频时最自然的语义是"打开这部片子"，而本应用以目录
-  为单位扫描——替用户扫它所在的目录，等于把桌面上的一个电影文件变成扫描整个桌面
-  （上万条目、几十秒读盘）。类型过滤在 Go 侧（`App.ResolveDroppedFolder`），
-  因为 JS 的 `File` 对象不带 `isDirectory`：拖文件夹时 `dataTransfer.files` 里
-  那条记录的 `type` 为空，与"无扩展名的文件"无法区分。
-  遮罩必须 `pointer-events: none`，并用进出**计数**抵消 `dragleave` 的逐层触发
-  （直接置 false 会疯狂闪烁）
+- **拖放由 Go 侧接管，前端只订阅事件**（v3 与 v2 的机制完全不同，别照旧文档写）：
+  - 窗口开 `WebviewWindowOptions.EnableFileDrop`；v3 **没有** v2 的
+    `DisableWebViewDrop` 这个坑了——运行时代码一被 import 就在 `document` 上挂
+    dragover/drop 并统一 `preventDefault`，"拖入 .mp4 让 webview 就地导航走"
+    由框架兜住（这也是必须加载运行时的原因之一）。
+  - 真正的路径解析在**运行时模块**里（Windows 走 WebView2 的
+    `postMessageWithAdditionalObjects`），Go 侧接的是窗口事件：
+    `win.OnWindowEvent(events.Common.WindowFilesDropped, …)` → 过滤出文件夹 →
+    `app.Event.Emit("folder-dropped", 路径)`；没有文件夹就发
+    `"folder-drop-rejected"`。事件名两边各写一份，由
+    `check-config-sync.mjs` 断言（改 Go 侧不改前端 = 拖进去毫无反应且没有报错）。
+  - `data-file-drop-target` 是**文档契约**（"拖到带该属性的元素上才触发
+    WindowFilesDropped"），挂在 `App.svelte` 的 `<main>` 上。v3.0.0 的实现其实
+    不看它也能收到 drop，但按契约写才不会被后续版本改坏。
+  - 遮罩仍由前端自己的 `dragenter`/`dragleave` **进出计数**驱动（运行时加的
+    `file-drop-target-active` 只是个空类名，撑不起"当前的视频列表会被替换"
+    这句说明）；直接置 `false` 会疯狂闪烁，遮罩必须 `pointer-events: none`。
+  - **只接受文件夹**：拖入单个视频时最自然的语义是"打开这部片子"，而本应用以目录
+    为单位扫描——替用户扫它所在的目录，等于把桌面上的一个电影文件变成扫描整个桌面
+    （上万条目、几十秒读盘）。类型过滤在 Go 侧（`resolveDroppedFolder`）：前端拿到的
+    只是路径字符串，判定"是不是目录"要问文件系统。
 - **桌面端扫描进度靠轮询 `GetScanProgress`，不是事件推送**：扫描跑在调用
   `ScanVideos` 的那个 goroutine 里，事件通道要额外维护订阅/退订，还要处理
   "扫描已结束、事件仍在路上"的竞态；250ms 一次的轮询与一次重绘同量级。
   网页端则复用 `/refresh-status` 的 `progress` 字段（两个分支都带）。
   **进度只含计数、不含当前目录**：它会经 HTTP 发给网页端，而共享方电脑的目录
   结构不在对外承诺之内
+- **选择目录对话框的"取消"在 v3 是 error，不是空串**：用户点取消时
+  `PromptForSingleSelection` 返回 `cfd.ErrorCancelled`（文案 "cancelled by user"），
+  而 v2 的 `OpenDirectoryDialog` 返回 `("", nil)`。不拦这一步，取消就会变成前端
+  一条红色"选择文件夹失败"——用户只是关了个对话框，会以为程序坏了。
+  `PickFolder` 用 `isDialogCancelled` 把它映射回 `("", nil)`；判据按**文案**
+  （该 sentinel 在 v3 的 internal 包里，外部 import 不到），由
+  `TestIsDialogCancelled` 锁住，同时断言真正的失败不会被误吞
 - **打开外部链接必须走 `platform.openExternal`，不能写成 `<a href>`**：桌面端跑在
   Wails webview 里，普通链接会让**应用自己**就地导航到目标站点——整页变成网页、
   SPA 状态全丢，而且没有"返回"可点。`openExternal` 在桌面端交给系统浏览器
-  （Go 侧 `App.OpenURL` → `runtime.BrowserOpenURL`，只放行 http/https），
+  （Go 侧 `App.OpenURL` → `app.Browser.OpenURL`，只放行 http/https），
   网页端开新标签页。共享面板的"打开访问地址"与页脚的"源码"都走它，所以组件里
   用的是 `<button>` 并抹掉原生外观（`background:none; border:0; padding:0; font:inherit`）
 - **视频扩展名一律按小写比较**：`videoTypes` 的键是小写，查表前必须 `ToLower`；
@@ -297,16 +327,20 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   **回环** HTTP 服务器（随机端口，与资产源 `http://wails.localhost` 不同源），
   不放行则视频全被拦。**只多放行回环**（`http://127.0.0.1:*`），不得放宽成 `*`。
   `desktop_csp_test.go` 逐指令比对两侧 + 断言 `main.go` 真的接了中间件
-  （自建 options 的测试证明不了装配，那是本项目踩过的坑）。
-  注意 `wails dev` 会把 Middleware 置 nil，本策略只在 `wails build` 产物生效
+  （自建 handler 链的测试证明不了装配，那是本项目踩过的坑）。
+  v3 的挂载点是 `application.AssetOptions.Middleware`（v2 是
+  `options.App.AssetServer.Middleware`），签名不变。v3 不注入任何脚本，
+  因此产物里**不能出现内联 `<script>`**（否则被 `script-src 'self'` 拦掉，
+  表现为整页白屏）——`TestDesktopCSPReachesRealAssetServerResponse` 反向断言这一条
 - `INLINE_PLAYABLE_EXTENSIONS`（format.ts，能否内联播放）是**启发式清单不是保证**：
   不要改成 `canPlayType` 探测（假阴性），不要当硬保证；`VideoPlayer` 的播放失败回退
   （error 事件 → 系统播放器，页面侧在 App.svelte 的 handlePlaybackFailure）不能删。
   它必须是 `videoTypes` 的子集（`check-config-sync.mjs` 断言）
 - **跨文件一致性由 `scripts/check-config-sync.mjs` 把守**（接入 pnpm check/build）：
   INLINE ⊆ VIDEO_TYPES、两清单无重复全小写、`DEFAULT_SHARE_PORT`/`MIN_VIDEO_FILE_SIZE_BYTES`
-  与 Go 常量一致、**版本号在 `wails.json` 的 `info.productVersion` /
-  `frontend/package.json` 的 `version` / `CHANGELOG.md` 最新条目三处一致**、
+  与 Go 常量一致、**版本号在 `build/windows/info.json` 的 `ProductVersion`
+  （含 `fixed.file_version`）/ `build/config.yml` 的 `info.version` /
+  `frontend/package.json` 的 `version` / `CHANGELOG.md` 最新条目四处一致**、
   `app.go` 的绑定方法与 `desktop.ts` 的 `AppBindings` 名字与参数个数一一对应、
   **`docs/api.md` 里复述的常量值**（session 小时数、限流"连续 N 次失败后锁 M 秒"、
   刷新冷却秒数、端口重试个数、`/auth` 请求体 KB、默认端口示例）与 Go 常量一致、
@@ -319,23 +353,25 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - **`scripts/check-web-build.mjs` 必须断言"入口真的被引用"**：只校验
   "index.html 引用的资源都存在"是不够的——`<script>` 标签整个消失时引用列表为空，
   循环一次都不跑、照样打绿勾，而这正是白屏形态。现在强制至少 1 个 `.js` 与 1 个 `.css`
-- **发版改版本号要同时动三处**：`wails.json` 的 `info.productVersion`（进 exe 版本
-  资源）、`frontend/package.json` 的 `version`、`CHANGELOG.md` 顶部的
-  `## [x.y.z] - 日期`。
+- **发版改版本号要同时动四处**（v3 把 v2 的 `wails.json` 拆成了两个文件）：
+  `build/windows/info.json` 的 `fixed.file_version` 与 `info."0409".ProductVersion`
+  （`wails3 generate syso` 直接读，进 exe 版本资源）、`build/config.yml` 的
+  `info.version`（打包元数据）、`frontend/package.json` 的 `version`、
+  `CHANGELOG.md` 顶部的 `## [x.y.z] - 日期`。
   漏掉 CHANGELOG 是这里最常见的漂移，`check-config-sync.mjs` 会红灯。
-  **页脚显示的版本号不是第四处手写副本**：`frontend/vite.config.ts` 在构建期从
-  `wails.json` 的 `info.productVersion` 取值、用 `define` 替换 `__APP_VERSION__`
-  （读不到或不是 `x.y.z` 直接让构建失败），所以"要改的地方"仍然只有三处；
+  **页脚显示的版本号不是第五处手写副本**：`frontend/vite.config.ts` 在构建期从
+  `build/windows/info.json` 的 `ProductVersion` 取值、用 `define` 替换
+  `__APP_VERSION__`（读不到或不是 `x.y.z` 直接让构建失败）；
   不要在 `.svelte` 里手写版本字符串
   打 tag 即触发 `.github/workflows/release.yml` 构建并创建 Release，
   已发布过的 tag 不要原地重打（附件与已下载的人会对不上）
 - **发版顺序：先推 `master`，等 CI 在那个 commit 上全绿，最后才推 tag**。
   不要先推 tag 再等构建——tag 一旦推出去就**收不回来**了（见下条的 ruleset），
-  而 `release.yml` 里的静态检查、`-race`、`wails build` 都要在 tag 之后才跑；
+  而 `release.yml` 里的静态检查、`-race`、`wails3 build` 都要在 tag 之后才跑；
   中途失败就会留下一个"tag 已存在但 Release 没建出来"的半成品状态。
-  配套顺序：改三处版本号 → `pnpm check`（版本号一致断言）→ 提交推 `master` →
+  配套顺序：改四处版本号 → `pnpm check`（版本号一致断言）→ 提交推 `master` →
   等 CI 绿 → `git tag -a v<x.y.z>` → `git push origin v<x.y.z>`。
-  推 tag 前可先自检三点：tag 名 = `v` + `wails.json` 的 `productVersion`
+  推 tag 前可先自检三点：tag 名 = `v` + `build/windows/info.json` 的 `ProductVersion`
   （`release.yml` 会硬校验）、该 tag 本地与远端都不存在、`HEAD` == `origin/master`
 - **仓库规则（GitHub rulesets，2026-10 加入，均对管理员生效、无 bypass）**：
   「保护 master」拦删除 / 强推 / merge commit（要求线性历史）；
@@ -425,7 +461,7 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   比本机新；第二次是本机从 1.27.1 升到 1.27.2 而仓库没跟着动。
   所以"升级 Go"包含**本机升级**这一半——local 与 CI **任意一侧**漂移都会触发同一故障。
   "本地能过"不代表 CI 能过，反之亦然，只要两边工具链版本不同。
-  钉死 Go 还有一个理由：`wails build` 用的是同一个工具链，钉死才能保证任何人、
+  钉死 Go 还有一个理由：`wails3 build` 用的是同一个工具链，钉死才能保证任何人、
   任何时间跑 CI 结果一致。
   **升级 Go 的步骤**：先本地装新 Go → 升 staticcheck 到兼容版 → `./...` 清零告警 →
   再同时改上面列的五处。

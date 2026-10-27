@@ -14,14 +14,23 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/wailsapp/wails/v2"
-	"github.com/wailsapp/wails/v2/pkg/options"
-	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
+	"github.com/wailsapp/wails/v3/pkg/application"
+	"github.com/wailsapp/wails/v3/pkg/events"
 )
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+// desktopURL 是桌面端窗口的起始地址。
+//
+// **`?desktop=1` 是前端判定"我在 webview 里"的唯一依据**，不是多余参数：
+// v2 时代前端靠 `"go" in window` 判断（Wails 会注入 window.go），v3 改成了
+// 服务 + `Call.ByName`，页面里不再有任何同步可见的全局标记——`window._wails`
+// 是运行时代码自己建的，网页端 import 之后同样存在，无法区分。
+//
+// 这个参数由 Go 侧控制、在首帧之前就出现在 location 里，因此是同步可读的；
+// 而 `wails.localhost` 这类主机名属于 Wails 内部实现，随版本可能变。
+const desktopURL = "/?desktop=1"
 
 func main() {
 	closeLog, logPath := setupLogging()
@@ -46,55 +55,86 @@ func main() {
 		showFatalError(logPath, fmt.Errorf("前端资源缺失，请重新安装：%w", err))
 	}
 	shareServer := share.New(st, pw, dist)
-	app := NewApp(st, pw, shareServer, store)
+	appSvc := NewApp(st, pw, shareServer, store)
 
 	// 桌面端内联播放走回环 HTTP 服务器：Wails 资产服务会把响应体全量缓冲进
 	// 内存再交给 WebView2，大视频会无限转圈（见 internal/player 包注释）。
-	// 必须在 wails.Run 之前启动，保证前端任何时刻都能拿到稳定端口。
+	// 必须在 app.Run 之前启动，保证前端任何时刻都能拿到稳定端口。
 	playerServer := player.New(st)
 	if err := playerServer.Start(); err != nil {
 		// 回环监听失败极罕见；不阻断启动，内联播放会经 error 事件回退系统播放器
 		slog.Error("回环播放服务器启动失败，内联播放将回退系统播放器", "err", err)
 	}
-	app.player = playerServer
+	appSvc.player = playerServer
 
-	err = wails.Run(&options.App{
-		Title:            "视频扫描器",
-		Width:            1000,
-		Height:           700,
-		MinWidth:         800,
-		MinHeight:        500,
-		BackgroundColour: &options.RGBA{R: 0x07, G: 0x0b, B: 0x14, A: 255}, // theme.css 的 --bg，防首帧闪白
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-			// 桌面端 CSP：Wails v2 没有 CSP 配置项，只能靠中间件注入。
+	// 单实例回调里要唤回窗口，而窗口在 Options 之后才创建，因此先声明。
+	var win *application.WebviewWindow
+
+	wailsApp := application.New(application.Options{
+		Name:        "视频扫描器",
+		Description: "扫描本地视频文件夹并在局域网内共享播放",
+		// v3 的绑定单位是"服务"：application.NewService 把指针上的导出方法
+		// 以 `main.App.<方法>` 为全限定名注册（包路径 + 类型名 + 方法名）。
+		// 前端手写的 AppBindings 正是按这个名字调用的（见 desktop.ts）。
+		Services: []application.Service{application.NewService(appSvc)},
+		Assets: application.AssetOptions{
+			Handler: application.AssetFileServerFS(dist),
+			// 桌面端 CSP：v3 仍然没有 CSP 配置项，只能靠资产中间件注入。
 			// 见 desktop_csp.go 的说明（含 media-src 必须放行回环地址的原因）。
 			Middleware: desktopCSPMiddleware,
 		},
-		DragAndDrop: &options.DragAndDrop{
-			// 拖入文件夹直接扫描。路径由 WebView2 的
-			// postMessageWithAdditionalObjects 解析，需要运行时
-			// >= 1.0.1774.30；更旧的版本上拖放静默无效，其余功能不受影响。
-			//
-			// **不要**同时开 DisableWebViewDrop：它对应的不是"再保险一点"，
-			// 而是 WebView2 的 PutAllowExternalDrop(false)——把外部拖放整个
-			// 关掉，JS 连 dragover/drop 都收不到，Wails 的路径解析也就无从
-			// 触发（拖进去毫无反应）。两者是互斥方案，不是双保险。
-			// 阻止"拖入 .mp4 后 webview 就地导航到那个文件"的，是 Wails
-			// 运行时在 dragover/drop 上的 preventDefault（它在前端调用
-			// window.runtime.OnFileDrop 之后才注册，见 desktop.ts）。
-			EnableFileDrop: true,
-		},
-		OnStartup:  app.startup,
-		OnShutdown: app.shutdown,
-		Bind:       []interface{}{app},
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-			DisableWindowIcon:    false,
+		// 退出时停掉共享与回环服务器，避免留下占用端口的残留进程。
+		// 放在 ServiceShutdown 也可以，但那时其它服务的停止顺序不受控；
+		// OnShutdown 是本进程唯一一次收尾，语义更明确。
+		OnShutdown: appSvc.shutdown,
+		// 双击第二次只唤回已有窗口：此前会开出第二个实例，它的共享端口
+		// 自增到 6009，用户扫码扫到哪个全看运气。
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.ramen1024.video-scanner",
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				if win == nil {
+					return
+				}
+				// 最小化时 Show 不会还原，必须先 Restore
+				win.Restore()
+				win.Show()
+				win.Focus()
+			},
 		},
 	})
-	if err != nil {
+	appSvc.wails = wailsApp
+
+	win = wailsApp.Window.NewWithOptions(application.WebviewWindowOptions{
+		Title: "视频扫描器",
+		URL:   desktopURL,
+		Width: 1000, Height: 700,
+		MinWidth: 800, MinHeight: 500,
+		// theme.css 的 --bg，防首帧闪白
+		BackgroundColour: application.NewRGBA(0x07, 0x0b, 0x14, 255),
+		// 拖入文件时，运行时按前端元素上的 data-file-drop-target 属性认投放区
+		// （本应用整页都是投放区，属性挂在 App.svelte 的根节点上）；
+		// 路径解析出来后以窗口事件 WindowFilesDropped 交给 Go（见下方订阅）。
+		//
+		// v3 不需要 v2 那套"前端必须调 window.runtime.OnFileDrop 才生效"的
+		// 注册：运行时模块一被 import 就会在 document 上挂 dragover/drop
+		// 监听并统一 preventDefault，所以"拖入 .mp4 让 webview 就地导航走"
+		// 这个坑由框架兜住了。代价是**运行时必须真的被加载**——
+		// 前端是动态 import 的（见 desktop.ts），网页端不会加载它。
+		EnableFileDrop: true,
+	})
+
+	win.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
+		folder := resolveDroppedFolder(e.Context().DroppedFiles())
+		if folder == "" {
+			// 没有文件夹就什么都不做：替用户扫"文件所在的目录"会让
+			// 桌面上的一个电影变成扫描整个桌面（见 resolveDroppedFolder）。
+			wailsApp.Event.Emit(eventFolderDropRejected, nil)
+			return
+		}
+		wailsApp.Event.Emit(eventFolderDropped, folder)
+	})
+
+	if err := wailsApp.Run(); err != nil {
 		// 走到这里说明窗口没能建起来（最常见是 WebView2 运行时缺失/被占用）。
 		// 不弹窗的话用户只会看到"双击没反应"，无从判断发生了什么。
 		showFatalError(logPath, fmt.Errorf("应用窗口创建失败：%w\n\n"+

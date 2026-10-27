@@ -1,0 +1,35 @@
+version: '3'
+
+vars:
+  APP_NAME: "视频扫描器"
+  # 产物路径保持 v2 时代的位置：README、CI 与发布脚本都按 build/bin 找它
+  BIN_DIR: "build/bin"
+  # 与 frontend/vite.config.ts 的 server.port（strictPort）保持一致
+  VITE_PORT: '{{.WAILS_VITE_PORT | default 5173}}'
+  GOOS: '{{.GOOS | default OS}}'
+
+includes:
+  common: ./build/Taskfile.yml
+  windows: ./build/windows/Taskfile.yml
+
+tasks:
+  build:
+    summary: 构建应用（先构建前端，再编 Go）
+    cmds:
+      - task: "{{.GOOS}}:build"
+
+  run:
+    summary: 运行已构建的应用
+    cmds:
+      - task: "{{.GOOS}}:run"
+
+  dev:
+    summary: 开发模式（Go 侧文件变动自动重编，前端由 Vite 热重载）
+    cmds:
+      - wails3 dev -config ./build/config.yml -port {{.VITE_PORT}}
+
+  clean:
+    summary: 清理构建产物
+    cmds:
+      - rm -rf "{{.BIN_DIR}}"
+      - rm -f wails_windows_*.syso

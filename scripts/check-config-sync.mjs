@@ -133,6 +133,21 @@ if (!appSvelte.includes(`"${cancelledText}"`)) {
   );
 }
 
+// ---------- 1d. Go 侧事件名必须与前端订阅的一致 ----------
+
+// 拖放从"前端注册回调"改成了"Go 侧 OnWindowEvent → 推事件"，于是事件名成了
+// 新的跨语言契约：Go 改名后前端 `Events.On("folder-dropped")` 依然编译通过，
+// 只在运行时表现为"拖动文件夹进去毫无反应"——没有任何报错可看。
+const eventNames = [...appGo.matchAll(/^\s*(event\w+)\s*=\s*"([^"]+)"/gm)].map((m) => m[2]);
+if (eventNames.length === 0) {
+  fail("app.go 中没解析到任何事件名常量（正则或代码结构已变）");
+}
+for (const name of eventNames) {
+  if (!desktopTs.includes(`"${name}"`)) {
+    fail(`desktop.ts 未订阅 Go 侧事件 "${name}"：改事件名必须同步前端，否则拖放静默失效`);
+  }
+}
+
 // ---------- 2. 端口与最小体积常量一致 ----------
 
 const configTs = readFileSync(join(root, "frontend/src/lib/config.ts"), "utf8");
@@ -275,8 +290,7 @@ if (!hasMinHeightZero) {
   );
 }
 
-// ---------- 3c. 预涂底色：theme.css / index.html，两处必须一致 ----------
-// 首帧防闪屏的内联样式与 meta theme-color 只能硬编码颜色（CSS 变量那时还没生效），
+// ---------- 3c. 预涂底色：theme.css / index.html，两处必须一致 ----------// 首帧防闪屏的内联样式与 meta theme-color 只能硬编码颜色（CSS 变量那时还没生效），
 // 因此底色在 theme.css 之外还有两份字面量。三者漂移的症状是**启动瞬间闪一下**
 // 旧底色，或者在手机上地址栏出现一条与原背景不同的色带——都很轻微，没人会
 // 为它开 issue，但每次启动都看得见。
@@ -305,11 +319,15 @@ if (prepaintMatch[1].toLowerCase() !== bgHex) {
 
 // main.go 的 BackgroundColour 是第三份：Wails 窗口在 HTML 到达之前就显示了，
 // 它决定那一刻的颜色，所以不能与 CSS 分叉。
+//
+// v3 的写法是 application.NewRGBA(r, g, b, a)（v2 是 &options.RGBA{R: …}），
+// 改类型时这条正则必须跟着改——否则它会以"找不到定义"的形式红灯，
+// 这是刻意的：**宁可红灯，也不要因为匹配不到而静默跳过这条断言**。
 const mainGo = readFileSync(join(root, "main.go"), "utf8");
 const bgColourMatch = mainGo.match(
-  /BackgroundColour:\s*&options\.RGBA\{R:\s*(0x[0-9a-fA-F]+),\s*G:\s*(0x[0-9a-fA-F]+),\s*B:\s*(0x[0-9a-fA-F]+)/,
+  /BackgroundColour:\s*application\.NewRGBA\(\s*(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+),\s*(0x[0-9a-fA-F]+),/,
 );
-if (!bgColourMatch) fail("main.go 中找不到 BackgroundColour 的 RGBA 定义");
+if (!bgColourMatch) fail("main.go 中找不到 BackgroundColour: application.NewRGBA(...) 定义");
 const goBgHex = `#${[bgColourMatch[1], bgColourMatch[2], bgColourMatch[3]]
   .map((v) => Number(v).toString(16).padStart(2, "0"))
   .join("")}`;
@@ -320,24 +338,47 @@ if (goBgHex.toLowerCase() !== bgHex) {
   );
 }
 
-// ---------- 4. 版本号：wails.json / frontend/package.json / CHANGELOG 三处一致 ----------
+// ---------- 4. 版本号：info.json / config.yml / package.json / CHANGELOG 一致 ----------
 
-// 产品版本写在两个 JSON 里（wails.json 的 productVersion 进 exe 版本资源，
-// package.json 的 version 只是记录），CHANGELOG 的顶层条目再写一遍。三处漂移
-// 的症状是"发出去的 exe 自称旧版本"——发布之后才发现，而那时 tag 已经推了。
-//
-// 不要图省事只比前两处：CHANGELOG 漏写新条目是这里最容易发生的一种漂移。
-const wailsJson = JSON.parse(readFileSync(join(root, "wails.json"), "utf8"));
-const pkgJson = JSON.parse(readFileSync(join(root, "frontend/package.json"), "utf8"));
+// v2 时代版本号只有 wails.json 一处（productVersion），v3 拆成了两处：
+//   - build/windows/info.json 的 ProductVersion —— generate:syso 直接读它，
+//     进 exe 的版本资源（用户右键属性看到的就是它）
+//   - build/config.yml 的 info.version —— 打包元数据（msix/nsis/macOS）
+// 再加上 package.json 的记录与 CHANGELOG 的顶层条目，一共四处。任何一处漂移
+// 的症状都是"发出去的 exe 自称旧版本"，而那通常要等发布之后才发现。
+const infoJson = JSON.parse(readFileSync(join(root, "build/windows/info.json"), "utf8"));
 
-const productVersion = wailsJson?.info?.productVersion;
-if (typeof productVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(productVersion)) {
-  fail(`wails.json 的 info.productVersion 缺失或不是 x.y.z 形式：${productVersion}`);
+const infoVersion = infoJson?.info?.["0409"]?.ProductVersion;
+if (typeof infoVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(infoVersion)) {
+  fail(`build/windows/info.json 的 info."0409".ProductVersion 缺失或不是 x.y.z 形式：${infoVersion}`);
 }
-if (pkgJson.version !== productVersion) {
+const fixedVersion = infoJson?.fixed?.file_version;
+if (fixedVersion !== infoVersion) {
   fail(
-    `frontend/package.json 的 version(${pkgJson.version}) 与 wails.json 的 ` +
-      `productVersion(${productVersion}) 不一致`,
+    `build/windows/info.json 的 fixed.file_version(${fixedVersion}) 与 ` +
+      `ProductVersion(${infoVersion}) 不一致——两个都会进 exe 的版本资源`,
+  );
+}
+
+// config.yml 是 YAML，这里不引 yaml 依赖：只从 `info:` 块里取 version。
+// 匹配不到就 fail（而不是跳过），因此正则失效时会立刻红灯。
+const configYml = readFileSync(join(root, "build/config.yml"), "utf8");
+const infoBlock = configYml.match(/^info:\n((?:\s{2,}.*\n|\n)+)/m)?.[1];
+if (!infoBlock) fail("build/config.yml 中找不到 info 块");
+const ymlVersion = infoBlock.match(/^\s+version:\s*"([^"]+)"/m)?.[1];
+if (!ymlVersion) fail("build/config.yml 的 info 块中找不到 version");
+if (ymlVersion !== infoVersion) {
+  fail(
+    `build/config.yml 的 info.version(${ymlVersion}) 与 build/windows/info.json 的 ` +
+      `ProductVersion(${infoVersion}) 不一致`,
+  );
+}
+
+const pkgJson = JSON.parse(readFileSync(join(root, "frontend/package.json"), "utf8"));
+if (pkgJson.version !== infoVersion) {
+  fail(
+    `frontend/package.json 的 version(${pkgJson.version}) 与 info.json 的 ` +
+      `ProductVersion(${infoVersion}) 不一致`,
   );
 }
 
@@ -347,15 +388,18 @@ const changelogVersion = changelog.match(/^##\s*\[(\d+\.\d+\.\d+)\]/m)?.[1];
 if (!changelogVersion) {
   fail("CHANGELOG.md 中找不到形如 `## [x.y.z]` 的版本标题");
 }
-if (changelogVersion !== productVersion) {
+if (changelogVersion !== infoVersion) {
   fail(
-    `CHANGELOG.md 最新条目为 ${changelogVersion}，与 wails.json 的 ` +
-      `productVersion(${productVersion}) 不一致（改版本号时别忘了 CHANGELOG）`,
+    `CHANGELOG.md 最新条目为 ${changelogVersion}，与 info.json 的 ` +
+      `ProductVersion(${infoVersion}) 不一致（改版本号时别忘了 CHANGELOG）`,
   );
 }
 
+const productVersion = infoVersion;
+
 console.log(
   `✓ 配置一致性校验通过：INLINE(${inlineExts.length}) ⊆ VIDEO_TYPES(${videoExts.length})，` +
-    `绑定方法 ${goBindings.size} 个两侧一致，端口/体积常量与 docs/api.md 复述一致，` +
-    `IP 缓存 TTL 单一来源，预涂底色 ${bgHex} 三处一致，版本号 v${productVersion} 三处一致`,
+    `绑定方法 ${goBindings.size} 个两侧一致，事件名 ${eventNames.length} 个两侧一致，` +
+    `端口/体积常量与 docs/api.md 复述一致，` +
+    `IP 缓存 TTL 单一来源，预涂底色 ${bgHex} 三处一致，版本号 v${productVersion} 四处一致`,
 );

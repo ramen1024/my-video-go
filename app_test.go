@@ -1,8 +1,11 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"regexp"
 	"testing"
 )
 
@@ -75,11 +78,13 @@ func TestIsAllowedExternalURL(t *testing.T) {
 	}
 }
 
-// 拖入路径的类型过滤必须在 Go 侧完成（JS 的 File 对象不带 isDirectory），
-// 而且只能挑出**文件夹**。
+// 拖入路径的类型过滤必须在 Go 侧完成（JS 侧拿到的只是路径字符串，
+// 判定"是不是目录"要问文件系统），而且只能挑出**文件夹**。
 //
 // 只收文件夹是刻意的：拖入单个视频时替用户扫它所在的目录，等于把"打开这部
 // 片子"变成"扫描整个桌面"——上万条目、几十秒读盘，用户完全预期不到。
+//
+// v3 把拖放事件收进了 Go 侧（OnWindowEvent），本函数因此不再需要 App 接收者。
 func TestResolveDroppedFolder(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "a.mp4")
@@ -87,19 +92,17 @@ func TestResolveDroppedFolder(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	app := &App{}
-
 	// 文件在前、目录在后：一次拖入多个条目时顺序不可控，必须跳过文件继续找
-	if got := app.ResolveDroppedFolder([]string{file, dir}); got != dir {
+	if got := resolveDroppedFolder([]string{file, dir}); got != dir {
 		t.Fatalf("应挑出目录 %q，实际 %q", dir, got)
 	}
-	if got := app.ResolveDroppedFolder([]string{file}); got != "" {
+	if got := resolveDroppedFolder([]string{file}); got != "" {
 		t.Fatalf("只有文件时应返回空串（前端据此提示\"请拖动文件夹\"），实际 %q", got)
 	}
-	if got := app.ResolveDroppedFolder(nil); got != "" {
+	if got := resolveDroppedFolder(nil); got != "" {
 		t.Fatalf("nil 输入应返回空串，实际 %q", got)
 	}
-	if got := app.ResolveDroppedFolder([]string{filepath.Join(dir, "nope")}); got != "" {
+	if got := resolveDroppedFolder([]string{filepath.Join(dir, "nope")}); got != "" {
 		t.Fatalf("不存在的路径应跳过，实际 %q", got)
 	}
 }
@@ -141,5 +144,77 @@ func TestIsRegularFile(t *testing.T) {
 	// 不存在的路径
 	if isRegularFile(filepath.Join(dir, "nope.mp4")) {
 		t.Fatal("不存在的路径必须拒绝")
+	}
+}
+
+// TestBindingServiceNameMatchesFrontend 锁定前端 `Call.ByName` 用的服务全限定名。
+//
+// v3 的服务名由 Wails 按 `reflect PkgPath + 类型名 + 方法名` 拼出（见
+// application.getMethods：`fmt.Sprintf("%s.%s.%s", packagePath, typeName, methodName)`），
+// 而运行时查找用的是同一张表（`boundMethods[FQN]`）——前端字符串写错不会编译报错、
+// svelte-check 也看不见，只会在运行时表现为**每一个**绑定调用都失败。
+//
+// **这里有个只会在测试里踩到的坑**：`main` 包的 PkgPath 在编译出的二进制里是
+// 字面量 "main"，在 `go test` 的测试进程里却是**模块路径**（my-video-go）。
+// 实测方式：同一段代码 `go build` 后打印 main、`go test` 里打印模块路径。
+// Wails 的绑定生成器跟随二进制（输出 main.App.X），所以前端常量必须是
+// main.App；如果这里直接拿测试进程的 PkgPath 去比，会得出相反的结论。
+//
+// 因此：PkgPath 等于模块路径时按 "main" 处理；App 被挪去子包时 PkgPath 变成
+// 真实子包路径，断言随即失败并提示同步前端。
+func TestBindingServiceNameMatchesFrontend(t *testing.T) {
+	elem := reflect.TypeOf(&App{}).Elem()
+
+	pkgPath := elem.PkgPath()
+	if pkgPath == modulePath(t) {
+		pkgPath = "main"
+	}
+	want := pkgPath + "." + elem.Name()
+
+	src, err := os.ReadFile("frontend/src/lib/platform/desktop.ts")
+	if err != nil {
+		t.Fatalf("读取 desktop.ts 失败: %v", err)
+	}
+	m := regexp.MustCompile(`const SERVICE = "([^"]+)"`).FindStringSubmatch(string(src))
+	if m == nil {
+		t.Fatal("desktop.ts 中找不到 const SERVICE = \"...\"")
+	}
+	if m[1] != want {
+		t.Fatalf("前端按 %q 调用，但 Wails 注册的名字是 %q（PkgPath + 类型名）", m[1], want)
+	}
+}
+
+// modulePath 从 go.mod 里读模块路径（用来识别"测试进程里的 main 包"）。
+func modulePath(t *testing.T) string {
+	t.Helper()
+	src, err := os.ReadFile("go.mod")
+	if err != nil {
+		t.Fatalf("读取 go.mod 失败: %v", err)
+	}
+	m := regexp.MustCompile(`(?m)^module\s+(\S+)\s*$`).FindStringSubmatch(string(src))
+	if m == nil {
+		t.Fatal("go.mod 中找不到 module 行")
+	}
+	return m[1]
+}
+
+// 对话框"用户取消"必须与"真的出错"区分开。
+//
+// v3 的 OpenFile 对话框在用户点取消时返回 error（`cfd.ErrorCancelled`，
+// 文案 "cancelled by user"），而 v2 返回 ("", nil)。不拦这一步，取消就会被
+// 前端当成失败弹红字——用户只是关了个对话框。判据是错误文案（内部包的
+// sentinel 外部 import 不到），所以这条测试同时锁住"别把判据改成别的东西"。
+func TestIsDialogCancelled(t *testing.T) {
+	if !isDialogCancelled(errors.New("cancelled by user")) {
+		t.Fatal("应把 \"cancelled by user\" 认成用户取消")
+	}
+	if !isDialogCancelled(errors.New("Canceled")) {
+		t.Fatal("大小写与拼写变体（canceled）也应认成取消")
+	}
+	if isDialogCancelled(errors.New("unable to create dialog: CoInitializeEx failed")) {
+		t.Fatal("真正的失败不能被当成取消——那会让用户完全看不到出错原因")
+	}
+	if isDialogCancelled(nil) {
+		t.Fatal("nil 不是取消")
 	}
 }

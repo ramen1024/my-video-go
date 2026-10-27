@@ -41,6 +41,10 @@ Thumbs.db
 
 # Wails 绑定生成物（desktop.ts 用自声明的 AppBindings，不依赖生成代码）
 frontend/wailsjs/
+frontend/bindings/
 
 # Wails CLI 本机状态
 frontend/package.json.md5
+
+# v3 的 syso（generate:syso 每次构建生成，用完即删）
+*.syso

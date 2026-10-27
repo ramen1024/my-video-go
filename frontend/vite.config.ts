@@ -4,23 +4,26 @@ import { fileURLToPath, URL } from "node:url";
 import { defineConfig } from "vite";
 
 /**
- * 产品版本，构建期从 `wails.json` 的 `info.productVersion` 取。
+ * 产品版本，构建期从 `build/windows/info.json` 的 `ProductVersion` 取。
  *
- * 界面上要显示版本号，但版本**不能**在前端再抄一份：wails.json / package.json /
- * CHANGELOG 三处已经由 `scripts/check-config-sync.mjs` 锁死一致，第四份手写副本
- * 不会被任何断言覆盖，发版时必然漂移（症状是界面自称旧版本，而 tag 已经推了）。
+ * 界面上要显示版本号，但版本**不能**在前端再抄一份：`build/config.yml`、
+ * `build/windows/info.json`、`package.json` 与 `CHANGELOG.md` 已经由
+ * `scripts/check-config-sync.mjs` 锁死一致，第五份手写副本不会被任何断言覆盖，
+ * 发版时必然漂移（症状是界面自称旧版本，而 tag 已经推了）。
  *
- * 取 wails.json 而不是 package.json：前者进 exe 版本资源，是真正的源头；
- * package.json 的 version 只是记录（同样的理由写在 check-config-sync.mjs 里）。
+ * 取 info.json 而不是 package.json：它经 `wails3 generate syso` 直接进 exe
+ * 的版本资源，是真正的源头；package.json 的 version 只是记录。v2 时代这个
+ * 源头是 wails.json 的 info.productVersion，v3 把它拆成了两处——exe 资源看
+ * info.json，打包元数据看 config.yml，因此这里挑"进 exe 的那一份"。
  */
 const pkgVersion: unknown = JSON.parse(
-  readFileSync(fileURLToPath(new URL("../wails.json", import.meta.url)), "utf8"),
-)?.info?.productVersion;
+  readFileSync(fileURLToPath(new URL("../build/windows/info.json", import.meta.url)), "utf8"),
+)?.info?.["0409"]?.ProductVersion;
 
 if (typeof pkgVersion !== "string" || !/^\d+\.\d+\.\d+$/.test(pkgVersion)) {
   // 静默回退成 "unknown" 会让"界面版本与 exe 版本对不上"重新变成不可见的漂移，
   // 因此这里直接让构建失败
-  throw new Error(`无法从 wails.json 读取合法的 info.productVersion：${String(pkgVersion)}`);
+  throw new Error(`无法从 build/windows/info.json 读取合法的 ProductVersion：${String(pkgVersion)}`);
 }
 
 /**

@@ -1,10 +1,14 @@
 /**
  * 桌面端（Wails webview）后端实现
  *
- * Wails v2 把 Go 侧绑定的方法注入为 `window.go.main.App.<方法>`，
- * 返回 Promise、错误在 reject 中携带 err.Error() 字符串。
- * 本文件负责声明绑定方法的 TS 形状（与根目录 app.go 一一对应），
- * 并把 Go 的数据形状映射到应用统一的 [`VideoItem`]。
+ * Wails v3 不再把绑定方法注入成 `window.go.main.App.<方法>`：绑定以"服务"
+ * 为单位注册，前端经 `Call.ByName("<包路径>.<类型>.<方法>", ...)` 调用，
+ * 错误以 RuntimeError（message 即 Go 侧 err.Error()）出现在 Promise reject 中。
+ *
+ * 本文件仍**手写**调用清单，不用 `wails3 generate bindings` 的生成物：
+ * 生成物要进仓库、且每次改 Go 签名都得重新生成，`pnpm check` 就再也离不开
+ * wails3 CLI 了。作为替代，`scripts/check-config-sync.mjs` 按名字+参数个数
+ * 比对 app.go 与本文件（AppBindings 接口），漂移照样红灯。
  */
 
 import type {
@@ -36,48 +40,61 @@ interface AppBindings {
   GenerateRandomPassword(): Promise<string>;
   ResetPassword(): Promise<void>;
   PickFolder(): Promise<string>;
-  ResolveDroppedFolder(paths: string[]): Promise<string>;
   OpenURL(url: string): Promise<void>;
 }
 
-interface WailsGlobal {
-  go?: { main?: { App?: AppBindings } };
+/**
+ * 服务全限定名：由 Wails 按 `包路径.类型名.方法名` 拼出（见 v3 的
+ * application.getMethods：`fmt.Sprintf("%s.%s.%s", packagePath, typeName, methodName)`）。
+ *
+ * 本包是 `package main`，Go 给 main 包的 PkgPath 就是字面量 `main`，
+ * 因此绑定名是 `main.App.<方法>`——**不是**模块路径 `my-video-go.App`。
+ * 改包名或把 App 移到子包时这里必须跟着改，否则所有调用都会"方法不存在"。
+ *
+ * 别拿 `go test` 里打印出来的 PkgPath 当依据：测试进程把 main 包编译成模块路径，
+ * 会得出相反结论。根包的 `TestBindingServiceNameMatchesFrontend` 用
+ * "PkgPath 等于模块路径就按 main 处理"的方式把这两个世界对齐，并直接与下面这个
+ * 常量比对——所以真正的护栏在那边，这里的注释只是解释。
+ */
+const SERVICE = "main.App";
+
+/** Go 侧事件名（见 app.go 的 eventFolderDropped / eventFolderDropRejected） */
+const EVENT_FOLDER_DROPPED = "folder-dropped";
+const EVENT_FOLDER_DROP_REJECTED = "folder-drop-rejected";
+
+/**
+ * Wails v3 前端运行时。
+ *
+ * **动态 import 而不是顶层 import**：这个模块在被 import 时就会在 document 上
+ * 挂监听——右键菜单（会把浏览器的默认右键菜单整个接管）与拖放（会 preventDefault
+ * 掉所有文件拖放）。桌面端与网页端是同一份产物，顶层 import 会让局域网里
+ * 用手机浏览器看片的人失去右键菜单、且拖文件进页面不再有任何浏览器默认行为。
+ *
+ * 拆成独立 chunk 后浏览器不会去下载它（它只由本文件在桌面端调用），
+ * 代价只是产物里多一个几百字节的入口。
+ */
+type WailsRuntime = typeof import("@wailsio/runtime");
+
+let runtimePromise: Promise<WailsRuntime> | null = null;
+
+function runtime(): Promise<WailsRuntime> {
+  runtimePromise ??= import("@wailsio/runtime").catch((e) => {
+    // 失败就清空，让下一次调用可以重试（否则整个会话永久不可用）
+    runtimePromise = null;
+    throw e;
+  });
+  return runtimePromise;
 }
 
 /**
- * Wails 注入的运行时（只声明本文件用到的那一个方法）
+ * 调用一个 Go 侧绑定方法。
  *
- * 这不是 `wailsjs/` 生成物：它与 `window.go` 一样是 Wails 在页面里注入的全局，
- * 因此不需要 wails CLI 参与 `pnpm check`。
+ * 每次调用都要先 await 运行时加载：init() 是第一个调用方，之后模块已在内存里，
+ * 开销只是一次已 resolve 的 await。
  */
-interface WailsRuntime {
-  /**
-   * 注册系统级文件拖放回调
-   *
-   * **必须由前端调用**：Go 侧的 `runtime.OnFileDrop` 只是订阅 `wails:file-drop`
-   * 事件，真正把 WebView2 解析出的绝对路径发出来的，是 JS 侧在调用本方法后
-   * 才挂上的 dragover/drop 监听器。少这一句，拖放会"看着接了、永远收不到"。
-   *
-   * `useDropTarget` 传 false：那套机制靠元素上的 CSS 自定义属性标记投放区，
-   * 而窗口里任意位置都该能接住文件夹，高亮由页面自己的遮罩负责。
-   */
-  OnFileDrop(
-    callback: (x: number, y: number, paths: string[] | null) => void,
-    useDropTarget?: boolean,
-  ): void;
-}
-
-function bindings(): AppBindings {
-  const app = (window as unknown as WailsGlobal).go?.main?.App;
-  if (!app) {
-    throw new Error("Wails 绑定不可用（应只在桌面端调用）");
-  }
-  return app;
-}
-
-function wailsRuntime(): WailsRuntime | null {
-  const rt = (window as unknown as { runtime?: WailsRuntime }).runtime;
-  return rt && typeof rt.OnFileDrop === "function" ? rt : null;
+async function call<T>(method: keyof AppBindings, ...args: unknown[]): Promise<T> {
+  const { Call } = await runtime();
+  return (await Call.ByName(`${SERVICE}.${String(method)}`, ...args)) as T;
 }
 
 /** Go `VideoFile` → 应用内统一视频条目（snake_case → camelCase） */
@@ -102,38 +119,30 @@ let initPromise: Promise<void> | null = null;
 /**
  * 拖放订阅者（同一时刻只有一个：根组件）
  *
- * `OnFileDrop` 在 Wails 的 JS 运行时里带 `registered` 标志，第二次调用直接
- * return，所以注册只做一次并常驻；事件按"当前订阅者"转发，避免把回调绑死在
- * 某个组件实例上。
+ * v3 把拖放判定挪到了 Go 侧（窗口的 WindowFilesDropped 事件 → 再推给前端），
+ * 因此这里只是订阅两个应用事件；事件名两边各写一份，由
+ * check-config-sync.mjs 断言一致。
  */
 let dropHandlers: FolderDropHandlers | null = null;
-let dropRegistered = false;
+let dropSubscription: Promise<void> | null = null;
 
-function ensureDropRegistration(): void {
-  if (dropRegistered) return;
-  const rt = wailsRuntime();
-  if (!rt) {
-    // 桌面端拿不到 runtime 说明页面被当成普通网页打开过：拖放整个不存在，
-    // 安静降级即可（canDropFolder 仍为 true，但拖进来不会发生任何事）
-    console.warn("Wails 运行时不可用，拖放功能将不可用");
-    return;
-  }
-  rt.OnFileDrop((_x, _y, paths) => {
-    const handlers = dropHandlers;
-    if (!handlers) return;
-    // 类型过滤放在 Go 侧：JS 的 File 对象不带 isDirectory
-    void bindings()
-      .ResolveDroppedFolder(paths ?? [])
-      .then((folder) => {
-        if (folder) handlers.onFolder(folder);
-        else handlers.onRejected();
-      })
-      .catch((e) => {
-        console.error("解析拖入的路径失败:", e);
-        handlers.onRejected();
-      });
-  }, false);
-  dropRegistered = true;
+function ensureDropSubscription(): Promise<void> {
+  dropSubscription ??= (async () => {
+    const { Events } = await runtime();
+    Events.On(EVENT_FOLDER_DROPPED, (event) => {
+      const folder = event.data;
+      if (typeof folder !== "string" || folder === "") return;
+      dropHandlers?.onFolder(folder);
+    });
+    Events.On(EVENT_FOLDER_DROP_REJECTED, () => {
+      // 拖入的是文件而不是文件夹：提示一句"请拖动文件夹"
+      dropHandlers?.onRejected();
+    });
+  })().catch((e) => {
+    dropSubscription = null;
+    throw e;
+  });
+  return dropSubscription;
 }
 
 export const desktop: Platform = {
@@ -148,13 +157,11 @@ export const desktop: Platform = {
 
   async init() {
     // 幂等：端口在应用生命周期内不变，取一次即可
-    // 必须保留 async：bindings() 在 window.go 缺失时会**同步**抛错，
-    // 若本方法是同步的，该异常不会变成 rejected promise，调用方的
-    // `await platform.init()` 也捕获不到（表现为未处理的 Promise 拒绝，
-    // 且后续的 restoreBackendState 等初始化步骤被静默跳过）。
+    // 必须保留 async：运行时加载失败时 await 会抛，调用方的
+    // `await platform.init()` 能捕获到（同步函数里抛则不会变成 rejected promise）。
     initPromise ??= (async () => {
       try {
-        const port = await bindings().GetVideoServerPort();
+        const port = await call<number>("GetVideoServerPort");
         // 0 表示回环服务器启动失败：视为未取得，videoSrc 返回空串，
         // 由 <video> 的 error 事件统一回退系统播放器
         videoServerPort = port > 0 ? port : null;
@@ -166,18 +173,21 @@ export const desktop: Platform = {
   },
 
   async pickFolder() {
-    const selected = await bindings().PickFolder();
+    const selected = await call<string>("PickFolder");
     return selected ? selected : null;
   },
 
   async getLastFolder() {
-    const folder = await bindings().GetLastFolder();
+    const folder = await call<string>("GetLastFolder");
     return folder ? folder : null;
   },
 
   onFolderDrop(handlers) {
     dropHandlers = handlers;
-    ensureDropRegistration();
+    // 订阅失败不该让界面挂掉：拖放用不了，其余功能照常
+    void ensureDropSubscription().catch((e) => {
+      console.error("订阅拖放事件失败，拖入文件夹将无效:", e);
+    });
     return () => {
       // 根组件不会卸载；这里只防"将来有人中途换订阅者后还收到旧回调"
       if (dropHandlers === handlers) dropHandlers = null;
@@ -195,17 +205,16 @@ export const desktop: Platform = {
       notify === undefined
         ? null
         : setInterval(() => {
-            void bindings()
-              .GetScanProgress()
+            void call<ScanProgress>("GetScanProgress")
               .then((p) => notify(p))
               .catch(() => {
                 // 进度是锦上添花：取不到就只保留转圈，不要让它影响扫描结果
               });
           }, 250);
     try {
-      const report = await bindings().ScanVideos(folder);
+      const report = await call<ScanReport>("ScanVideos", folder);
       // 扫描结果已写入后端状态，再取一次保证与后端一致（含排序生效后的顺序）
-      const videos = (await bindings().GetSharedVideos()) ?? [];
+      const videos = (await call<VideoFile[]>("GetSharedVideos")) ?? [];
       return { videos: videos.map(toVideoItem), report };
     } finally {
       if (timer !== null) clearInterval(timer);
@@ -213,12 +222,12 @@ export const desktop: Platform = {
   },
 
   async loadVideos() {
-    const videos = (await bindings().GetSharedVideos()) ?? [];
+    const videos = (await call<VideoFile[]>("GetSharedVideos")) ?? [];
     return videos.map(toVideoItem);
   },
 
   async cancelScan() {
-    await bindings().CancelScan();
+    await call<void>("CancelScan");
   },
 
   preferInlinePlayback(video) {
@@ -238,7 +247,7 @@ export const desktop: Platform = {
   },
 
   async openWithSystemPlayer(video) {
-    await bindings().PlayVideo(video.relativePath);
+    await call<void>("PlayVideo", video.relativePath);
   },
 
   async isPlaybackAuthFailure() {
@@ -249,38 +258,38 @@ export const desktop: Platform = {
   },
 
   async startShare(folder, port) {
-    return await bindings().StartShareServer(folder, port);
+    return await call<ShareServerInfo>("StartShareServer", folder, port);
   },
 
   async stopShare() {
-    await bindings().StopShareServer();
+    await call<void>("StopShareServer");
   },
 
   async getShareStatus() {
-    return await bindings().GetShareStatus();
+    return await call<ShareStatus>("GetShareStatus");
   },
 
   async getPasswordStatus() {
-    return await bindings().GetPasswordStatus();
+    return await call<PasswordStatus>("GetPasswordStatus");
   },
 
   async setPasswordEnabled(enabled) {
-    await bindings().SetPasswordEnabled(enabled);
+    await call<void>("SetPasswordEnabled", enabled);
   },
 
   async setPassword(password) {
-    await bindings().SetPassword(password);
+    await call<void>("SetPassword", password);
   },
 
   async generateRandomPassword() {
-    return await bindings().GenerateRandomPassword();
+    return await call<string>("GenerateRandomPassword");
   },
 
   async resetPassword() {
-    await bindings().ResetPassword();
+    await call<void>("ResetPassword");
   },
 
   async openExternal(url) {
-    await bindings().OpenURL(url);
+    await call<void>("OpenURL", url);
   },
 };

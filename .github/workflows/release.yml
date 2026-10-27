@@ -67,26 +67,31 @@ jobs:
 
       # tag 名与产品版本号必须一致：不对的话会发布一个"自称别的版本"的 exe，
       # 而那时 tag 已经推了（已发布过的 tag 不宜原地重打）。
+      #
+      # v3 没有 wails.json 了：进 exe 版本资源的是 build/windows/info.json
+      # （generate:syso 直接读它），build/config.yml 的 info.version 是打包元数据。
+      # 两者由 check-config-sync.mjs 断言一致，这里取前者。
       - name: 校验 tag 与产品版本号一致
         shell: pwsh
         run: |
-          $version = (Get-Content wails.json -Raw | ConvertFrom-Json).info.productVersion
+          $version = (Get-Content build/windows/info.json -Raw | ConvertFrom-Json).info.'0409'.ProductVersion
           $expected = "v$version"
           if ($env:GITHUB_REF_NAME -ne $expected) {
-            Write-Host "tag 为 $env:GITHUB_REF_NAME，但 wails.json 的 productVersion 是 $version（应为 $expected）"
+            Write-Host "tag 为 $env:GITHUB_REF_NAME，但 build/windows/info.json 的 ProductVersion 是 $version（应为 $expected）"
             exit 1
           }
           Write-Host "版本一致: $expected"
 
-      - name: 安装 Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+      # 与 ci.yml 相同：CLI 版本必须与 go.mod 的 wails/v3 一致
+      - name: 安装 Wails v3 CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
 
-      - name: wails build
+      - name: wails3 build
         run: |
           $env:PATH += ";$(go env GOPATH)\bin"
-          wails build
+          wails3 build
 
-      # 产物文件名含中文（wails.json 的 outputfilename），附件统一为 ASCII 名
+      # 产物文件名含中文（Taskfile.yml 的 APP_NAME），附件统一为 ASCII 名
       - name: 归一化产物文件名
         shell: pwsh
         run: |

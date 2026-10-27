@@ -80,10 +80,15 @@ jobs:
         run: go test -race ./...
 
       # 端到端编译验证：必须在 pnpm build 之后（go:embed 需要 frontend/dist 有产物）
-      - name: 安装 Wails CLI
-        run: go install github.com/wailsapp/wails/v2/cmd/wails@v2.16.0
+      #
+      # Wails v3 拆成了独立 CLI：命令是 wails3，构建流程走 Taskfile.yml 而不是
+      # wails.json。**版本必须与 go.mod 里的 wails/v3 完全一致**——CLI 与库版本
+      # 不一致时，生成的 syso / 绑定额外元数据可能与库对不上（v3 还在 3.0.x，
+      # 这类错配没有编译期检查）。
+      - name: 安装 Wails v3 CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
 
-      - name: wails build
+      - name: wails3 build
         run: |
           $env:PATH += ";$(go env GOPATH)\bin"
-          wails build
+          wails3 build

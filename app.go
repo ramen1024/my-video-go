@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"log/slog"
 	"my-video-go/internal/apperr"
@@ -18,13 +17,24 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
-// App 是绑定给前端的方法集。前端通过 window.go.main.App.<方法> 调用，
+// 桌面端推给前端的事件名。两边各写一份字符串，改一侧不会编译报错，
+// 因此由 check-config-sync.mjs 断言它们同时出现在 desktop.ts 里。
+const (
+	// eventFolderDropped 携带被拖入的**文件夹**绝对路径（string）。
+	eventFolderDropped = "folder-dropped"
+	// eventFolderDropRejected 表示拖入的内容里没有文件夹，前端给一句中性提示。
+	eventFolderDropRejected = "folder-drop-rejected"
+)
+
+// App 是绑定给前端的方法集。v3 以服务为单位注册，前端按
+// `main.App.<方法>`（包路径 + 类型名 + 方法名）调用，
 // 错误以 err.Error() 字符串出现在 Promise reject 中。
 type App struct {
-	ctx      context.Context
+	// wails 只用于对话框与系统浏览器；业务逻辑不依赖它，测试里为 nil。
+	wails    *application.App
 	st       *state.AppState
 	pw       *password.Manager
 	share    *share.Server
@@ -36,19 +46,15 @@ func NewApp(st *state.AppState, pw *password.Manager, shareServer *share.Server,
 	return &App{st: st, pw: pw, share: shareServer, settings: store}
 }
 
-// startup 由 Wails 在应用就绪时调用，之后才能使用对话框/浏览器等运行时能力。
-func (a *App) startup(ctx context.Context) {
-	a.ctx = ctx
-}
-
 // shutdown 在应用退出时尽力停止共享与回环播放服务器，避免留下占用端口的残留进程。
+// 由 main.go 的 Options.OnShutdown 调用（v3 不再回调 startup(ctx) 那一套）。
 //
 // 共享服务器**必须走状态机**（StartServerStopping → Stop → SetServerStopped），
 // 与 StopShareServer 完全一致：此前这里是 `if IsServerRunning() { Stop() }`，
 // 直接调 Stop 绕过了状态机——若用户此刻正在点"停止共享"（已处于 Stopping），
 // 两个 goroutine 会同时进入 Stop，界面状态与实例状态也可能分叉。
 // 状态机本身会拒绝"已在 Stopping"的第二次转换，因此这里天然是幂等的。
-func (a *App) shutdown(ctx context.Context) {
+func (a *App) shutdown() {
 	// 只在状态机允许时转换：Stopped/Stopping 都会返回错误，直接跳过即可
 	// （那种情况下服务器要么没在跑、要么另一个流程正在关它）。
 	if err := a.st.StartServerStopping(); err == nil {
@@ -255,26 +261,49 @@ func (a *App) ResetPassword() error {
 // ---- 桌面辅助 ----
 
 // PickFolder 弹出原生目录选择框，取消时返回空串。
+//
+// 两处 v3 的行为差异必须在这里兜住：
+//   - 对话框挂在 App 上（v2 要把 runtime 的 ctx 传进去）；
+//   - **用户点"取消"会返回 error 而不是空串**（v2 的 OpenDirectoryDialog 是
+//     ("", nil)）。不拦的话，取消 = 前端弹出"选择文件夹失败: cancelled by user"
+//     ——用户只是关了个对话框，却看到一条红色报错。见 isDialogCancelled。
+//
+// CanChooseFiles(false) 不是必须的（Windows 实现在两者都允许时优先按目录建
+// 对话框），写出来是为了让"只选目录"这个意图在代码里可见。
 func (a *App) PickFolder() (string, error) {
-	dir, err := runtime.OpenDirectoryDialog(a.ctx, runtime.OpenDialogOptions{
-		Title: "选择视频文件夹",
-	})
+	dir, err := a.wails.Dialog.OpenFile().
+		SetTitle("选择视频文件夹").
+		CanChooseFiles(false).
+		CanChooseDirectories(true).
+		PromptForSingleSelection()
 	if err != nil {
+		if isDialogCancelled(err) {
+			return "", nil
+		}
 		return "", err
 	}
 	return dir, nil
 }
 
-// ResolveDroppedFolder 从拖入的路径里挑出第一个**文件夹**，没有则返回空串。
+// isDialogCancelled 判断对话框返回的错误是否只是"用户取消"。
 //
-// 过滤放在 Go 侧：WebView2 交给前端的是绝对路径字符串，而 JS 的 File 对象
-// 不带 isDirectory（拖文件夹时 dataTransfer.files 里那条记录 type 为空，
-// 与"无扩展名的文件"无法区分）。
+// 按文案判断是不得已：v3 用 `cfd.ErrorCancelled`（"cancelled by user"）表示取消，
+// 但它在 `internal/go-common-file-dialog/cfd` 里，外部模块 import 不到，
+// `application` 也没有把它重导出。误伤面很小——这条路径上的其他错误都是
+// "对话框建不起来"（COM 初始化失败之类），文案里不会出现 cancel。
+func isDialogCancelled(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "cancel")
+}
+
+// resolveDroppedFolder 从拖入的路径里挑出第一个**文件夹**，没有则返回空串。
+//
+// 过滤放在 Go 侧：拖入文件夹时前端拿到的只是一串绝对路径，
+// 判定"它是不是目录"要问文件系统，JS 侧没有等价物。
 //
 // **只接受文件夹**是刻意的：拖入单个视频时最自然的语义是"打开这部片子"，
 // 而本应用的模型是"扫描一个目录"——若替用户扫它所在的目录，桌面上的一个
 // 电影文件就会演变成扫描整个桌面（上万条目、几十秒读盘），用户完全预期不到。
-func (a *App) ResolveDroppedFolder(paths []string) string {
+func resolveDroppedFolder(paths []string) string {
 	for _, p := range paths {
 		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
 			return p
@@ -285,15 +314,14 @@ func (a *App) ResolveDroppedFolder(paths []string) string {
 
 // OpenURL 用系统浏览器打开链接（共享面板的访问地址）。
 //
-// 只放行 http/https：runtime.BrowserOpenURL 最终走 ShellExecute，若把任意字符串
-// 透传过去，形如 `file:///C:/x.exe` 或自定义协议的入参会被交给对应的关联程序执行。
+// 只放行 http/https：底层最终走 ShellExecute，若把任意字符串透传过去，
+// 形如 `file:///C:/x.exe` 或自定义协议的入参会被交给对应的关联程序执行。
 // 当前唯一的调用方只传共享地址，这道校验是防止将来被复用到别处。
 func (a *App) OpenURL(url string) error {
 	if !isAllowedExternalURL(url) {
 		return apperr.InvalidPath("只允许打开 http/https 链接")
 	}
-	runtime.BrowserOpenURL(a.ctx, url)
-	return nil
+	return a.wails.Browser.OpenURL(url)
 }
 
 // isAllowedExternalURL 判断链接是否可交给系统浏览器打开。

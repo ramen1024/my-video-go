@@ -1,0 +1,44 @@
+version: '3'
+
+# 跨平台通用的构建步骤。
+#
+# 与 wails3 init 生成的模板相比，这里**故意去掉**了三件事：
+#   - generate:bindings：本仓库不提交、也不生成前端绑定。前端手写
+#     AppBindings 并通过 Call.ByName 调用（见 frontend/src/lib/platform/desktop.ts），
+#     正是为了让 `pnpm check` 不依赖 wails3 CLI。
+#   - generate:icons / frontend:vendor:*：图标是固定资产，没必要每次构建重算。
+#   - docker 交叉编译、garble 混淆、msix/nsis 打包：本项目只发单文件绿色版。
+
+tasks:
+  go:mod:tidy:
+    summary: 运行 go mod tidy
+    internal: true
+    cmds:
+      - go mod tidy
+
+  install:frontend:deps:
+    summary: 安装前端依赖
+    dir: frontend
+    # 不设 sources/generates 的增量判据：pnpm install 在依赖齐全时本来就很快，
+    # 而"任务被判据跳过、依赖其实没装"的排查成本远高于省下的那两秒。
+    cmds:
+      - pnpm install --frozen-lockfile
+
+  build:frontend:
+    summary: 构建前端产物（frontend/dist，经 go:embed 打进二进制）
+    run: once
+    dir: frontend
+    deps:
+      - task: install:frontend:deps
+    cmds:
+      # `pnpm build` 内部会跑 scripts/check-config-sync.mjs（见 package.json），
+      # 因此构建失败时先怀疑那份一致性断言，而不是 Vite。
+      - pnpm build
+
+  dev:frontend:
+    summary: 启动 Vite 开发服务器（配合 wails3 dev 使用）
+    dir: frontend
+    deps:
+      - task: install:frontend:deps
+    cmds:
+      - pnpm dev --port {{.VITE_PORT}} --strictPort

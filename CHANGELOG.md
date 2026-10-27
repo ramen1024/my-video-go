@@ -4,6 +4,32 @@
 
 ## [Unreleased]
 
+### 变更
+
+- **框架升级：Wails v2.16 → v3.0.0**（`v3.0.0` 于 2026-10-26 发布）。功能与界面
+  不变，改的是应用外壳与构建流程。顺带拿到 v3 原生支持的两件事：**系统托盘**与
+  **单实例**有了官方 API（本版先只启用单实例锁——第二次双击不再开出第二个实例、
+  共享端口自增到 6009、扫码扫到哪个全看运气）。
+  - **绑定方式**：`window.go.main.App.<方法>` → `Call.ByName("main.App.<方法>")`。
+    服务全限定名由 Wails 按 `reflect PkgPath + 类型名 + 方法名` 拼出，而 `main` 包
+    在**编译后的二进制**里 PkgPath 是字面量 `main`（`go test` 里却是模块路径——
+    照着测试里打印的值改前端会全盘调不通，`TestBindingServiceNameMatchesFrontend`
+    把两侧拉到一起比对）
+  - **前端运行时从 npm 引入且必须动态 `import()`**：`@wailsio/runtime` 被求值时
+    会立刻在 document 上挂右键菜单与拖放监听。桌面端与网页端是同一份产物，顶层
+    引入会让手机浏览器失去右键菜单；拆成独立 chunk 后网页端根本不下载它
+  - **拖放改为 Go 侧接管**：窗口事件 `WindowFilesDropped` → 过滤出文件夹 →
+    推 `folder-dropped` 事件给前端。v2 那套"前端必须调 `window.runtime.OnFileDrop`
+    才生效、且只能注册一次"的坑随之消失；`DisableWebViewDrop` 这个自相矛盾的
+    开关在 v3 也不存在了（`preventDefault` 由运行时统一做）
+  - **构建系统**：`wails.json` → `Taskfile.yml` + `build/config.yml`；
+    `wails build` → `wails3 build`。产物路径仍是 `build/bin/视频扫描器.exe`
+  - **版本号从三处变四处**：v3 把 v2 的 `wails.json` 拆成了 `build/windows/info.json`
+    （进 exe 版本资源，`wails3 generate syso` 直接读、不再做模板替换）与
+    `build/config.yml`（打包元数据）。`check-config-sync.mjs` 四处一起断言
+  - 桌面端 CSP 仍由 `share.BrowserCSP` 派生，挂载点改为
+    `application.AssetOptions.Middleware`
+
 ## [0.5.1] - 2026-10-27
 
 ### 新增
