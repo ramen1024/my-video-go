@@ -362,7 +362,12 @@ if (fixedVersion !== infoVersion) {
 
 // config.yml 是 YAML，这里不引 yaml 依赖：只从 `info:` 块里取 version。
 // 匹配不到就 fail（而不是跳过），因此正则失效时会立刻红灯。
-const configYml = readFileSync(join(root, "build/config.yml"), "utf8");
+//
+// **读取时必须归一化行尾**：本脚本的匹配都是按 `\n` 写的，而 git 在 Windows 上
+// 检出的工作副本可能是 CRLF（`core.autocrlf` / `.gitattributes` 的组合不由脚本
+// 决定）。曾出现"某次改写把 config.yml 存成 CRLF，于是这里报'找不到 info 块'"——
+// 文件内容其实完好，纯粹是行尾问题。归一化一次比给每条正则都加 `\r?` 可靠。
+const configYml = readFileSync(join(root, "build/config.yml"), "utf8").replace(/\r\n/g, "\n");
 const infoBlock = configYml.match(/^info:\n((?:\s{2,}.*\n|\n)+)/m)?.[1];
 if (!infoBlock) fail("build/config.yml 中找不到 info 块");
 const ymlVersion = infoBlock.match(/^\s+version:\s*"([^"]+)"/m)?.[1];
