@@ -29,6 +29,10 @@
 2. 下载最新版本中的 `video-scanner-*-windows-amd64.exe`；
 3. 双击运行即可，无需安装。
 
+> **国内打不开 GitHub 时**，改用 Gitee 镜像：
+> [gitee.com/my_little_world/my-video-go](https://gitee.com/my_little_world/my-video-go/releases/latest)。
+> 那边的 exe 与 GitHub 是同一份构建产物；代码可能晚几分钟同步，但发布版是同步推过去的。
+
 版本之间的变化见 [更新日志](CHANGELOG.md)。
 
 > **Windows 弹出"已保护你的电脑"怎么办？**

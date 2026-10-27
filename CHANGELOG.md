@@ -25,6 +25,17 @@
   遮罩常驻 DOM、默认 `display: none`，显示规则交给一条 CSS。最终效果不变
   （整页压暗 + "松手即扫描"卡片），但不再有两套"是否正在拖拽"的真相来源。
 
+### 构建
+
+- **新增 Gitee 镜像**：`mirror.yml` 在推 `master` 或 tag 时把代码连同全部标签推到
+  Gitee，`release.yml` 末尾再把 exe 同步进 Gitee 的同名发行版——国内用户打不开 GitHub
+  时仍能看源码、下程序。Gitee 侧是只读副本，改动请在 GitHub 上做（Gitee 的「仓库镜像
+  管理」是申请制，普通仓库没法让它自己来拉，只能由这边主动推）。产物同步失败**不阻塞**
+  发版，重跑 workflow 也不会堆重复附件。
+- README 的「下载」节与桌面端页脚各加一个 Gitee 入口。地址在 workflow / README /
+  页脚四处保持一致，`check-config-sync.mjs` 会断言（漂移的表现是镜像推到 A 仓库、
+  文档指向 B 仓库，用户 404 而 CI 全绿）。
+
 ### 清理
 
 - `.gitignore` 删掉 v2 CLI 的残留条目（`frontend/wailsjs/`、

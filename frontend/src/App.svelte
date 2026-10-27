@@ -30,6 +30,15 @@
    * 塞进去会抢视线，且 Header 在窄屏会折行、再挤一个就更容易误触。
    */
   const SOURCE_URL = "https://github.com/ramen1024/my-video-go";
+  /**
+   * Gitee 镜像地址（页脚"Gitee"入口）
+   *
+   * 国内打不开 GitHub 是常态，只给一个 GitHub 入口等于没有入口——点了要么一直转圈，
+   * 要么连系统浏览器都弹不出来。两个入口并排放，用户自己挑能开的那个。
+   * 这个地址必须与 `mirror.yml` / `release.yml` / README 下载节一致，
+   * `check-config-sync.mjs` 会断言四处相同。
+   */
+  const MIRROR_URL = "https://gitee.com/my_little_world/my-video-go";
 
   // videos 用 $state.raw：列表整体替换，元素本身从不原地修改。
   // 若用普通 $state，读取拿到的是 Proxy，而 platform.loadVideos() 返回的是普通
@@ -233,19 +242,19 @@
   }
 
   /**
-   * 打开源码仓库
+   * 用系统浏览器打开外部链接（页脚的源码 / Gitee 两个入口）
    *
    * **必须**走 `platform.openExternal`，不能写成 `<a href>`：桌面端跑在 Wails
-   * webview 里，普通链接会让**应用自己**就地导航到 GitHub——整页变成网页、
+   * webview 里，普通链接会让**应用自己**就地导航到目标站点——整页变成网页、
    * SPA 状态全丢，而且没有"返回"可点。openExternal 在桌面端交给系统浏览器
    * （Go 侧 `App.OpenURL`，只放行 http/https），网页端开新标签页；
    * 共享面板里那个"打开访问地址"走的也是这条路。
    */
-  async function openSource() {
+  async function openExternal(url: string) {
     try {
-      await platform.openExternal(SOURCE_URL);
+      await platform.openExternal(url);
     } catch (e) {
-      console.error("打开源码链接失败:", e);
+      console.error("打开外部链接失败:", e);
     }
   }
 
@@ -656,24 +665,37 @@
     -->
     <footer class="app-footer">
       <span>视频扫描器 v{__APP_VERSION__} · GPL-3.0</span>
-      <button class="source-link" onclick={openSource} title="在浏览器中打开源码仓库">
-        源码
-        <svg
-          width="10"
-          height="10"
-          viewBox="0 0 12 12"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-          aria-hidden="true"
-          focusable="false"
+      <div class="footer-links">
+        <button
+          class="source-link"
+          onclick={() => openExternal(SOURCE_URL)}
+          title="在浏览器中打开源码仓库（GitHub）"
         >
-          <path d="M3.2 8.8 L8.8 3.2" />
-          <path d="M4.6 3.2 H8.8 V7.4" />
-        </svg>
-      </button>
+          源码
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 12 12"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M3.2 8.8 L8.8 3.2" />
+            <path d="M4.6 3.2 H8.8 V7.4" />
+          </svg>
+        </button>
+        <button
+          class="source-link"
+          onclick={() => openExternal(MIRROR_URL)}
+          title="在浏览器中打开 Gitee 镜像（国内访问 GitHub 不畅时用这个）"
+        >
+          Gitee
+        </button>
+      </div>
     </footer>
   {/if}
 </main>
@@ -790,8 +812,16 @@
     color: var(--text-tertiary);
   }
 
+  /* 两个外链（源码 / Gitee 镜像）并排：gap 用 10px 而不是 12px —— 页脚本身只有
+     11px 字，间距再大就散成两个孤立标签，看不出是同一组。 */
+  .footer-links {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+  }
+
   /* 用 button 而不是 <a>：桌面端是 Wails webview，普通链接会把**应用自己**
-     导航到 GitHub（见 openSource 的说明）。因此这里要抹掉原生按钮外观，
+     导航到目标站点（见 openExternal 的说明）。因此这里要抹掉原生按钮外观，
      让它读起来像一行文字链接。焦点环由 theme.css 的全站 :focus-visible 提供。 */
   .source-link {
     display: inline-flex;

@@ -1,0 +1,89 @@
+name: Mirror
+
+# 把代码镜像到 Gitee。国内用户经常打不开 GitHub，镜像要解决的是"代码能看、exe 能下"
+# 两件事：代码走这个 workflow，产物在 release.yml 末尾（只有发版时才有）。
+#
+# 为什么是"这边主动推"而不是让 Gitee 自己拉：Gitee 的「仓库镜像管理」是**申请制**，
+# 官方写明只对 GVP / 推荐项目开通，普通个人仓库没有自动 Pull 镜像；网页端的
+# 「导入已有仓库」也只搬一次、且 Gitee 服务器访问 GitHub 经常超时。所以同步只能由
+# 触发端发起。Gitee 侧是**只读镜像**：任何直接提交到 Gitee 的改动都会被下一次
+# force push 覆盖。
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+  workflow_dispatch:
+
+# 只保留最新一次：连续两次 push 时，先启动的那次若后结束，会把 Gitee 覆盖回旧提交
+# （--force 不会互相报错，只会让后到的赢）。取消比串行更合适——镜像只需要终态正确。
+concurrency:
+  group: mirror-to-gitee
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # 镜像目标。改这里就要同步改 release.yml、README 的下载节、App.svelte 页脚的
+    # Gitee 链接——四处由 check-config-sync.mjs 断言一致（漂移的症状是镜像推到 A
+    # 仓库、文档指向 B 仓库，用户点开 404 而 CI 全绿）。
+    env:
+      GITEE_OWNER: my_little_world
+      GITEE_REPO: my-video-go
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # 标签要跟着一起过去，浅克隆拿不到 tag
+          fetch-depth: 0
+
+      # 显式补齐 refs/remotes/origin/*：checkout 在**推 tag** 时是 detached 检出，
+      # 是否顺带填充远端分支引用取决于实现细节，不能赌。下面推的是"上游的全部分支"，
+      # 这份引用必须先存在，否则通配 refspec 匹配不到任何东西、push 直接报错。
+      - name: 取全部远端分支与标签
+        run: |
+          git fetch --prune --tags origin '+refs/heads/*:refs/remotes/origin/*'
+          # refs/remotes/origin/HEAD 这个符号引用同样匹配下面的通配 refspec，会在
+          # Gitee 上多出一个名叫 HEAD 的真分支（本地实测如此；runner 上一般没有，
+          # 但删一下很便宜，不赌 checkout 的实现细节）。不存在时 set-head 会失败，
+          # 用 || true 吞掉。
+          git remote set-head origin --delete || true
+
+      # 令牌缺失要在这里说清楚。否则 URL 会拼成 https://my_little_world:@gitee.com/…
+      # git 只会回一句 "could not read Password"，看不出是 secret 没配。
+      - name: 校验 Gitee 令牌
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          if [ -z "$GITEE_TOKEN" ]; then
+            echo "::error::缺少 secret GITEE_TOKEN（Gitee 私人令牌，勾 projects）"
+            exit 1
+          fi
+
+      - name: 推送到 Gitee
+        env:
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+        run: |
+          set -eu
+          # Gitee 的 HTTPS 认证是"用户名 + 私人令牌当密码"，用户名不能省。
+          # 令牌只出现在这条命令里，Actions 会把日志中的 secret 值打码成 ***。
+          git remote add gitee \
+            "https://${GITEE_OWNER}:${GITEE_TOKEN}@gitee.com/${GITEE_OWNER}/${GITEE_REPO}.git"
+
+          # 为什么不用 `git push --mirror`：它会把 refs/remotes/origin/* 原样推过去，
+          # Gitee 上会多出一堆 origin/master 之类的伪分支。
+          # 为什么不推 refs/heads/*：checkout 只检出一个本地分支，多分支仓库会漏。
+          # refs/remotes/origin/* 才是"上游的全部分支"。
+          # 为什么**不**加 --prune：Gitee 新仓库的默认分支若是 main，prune 会尝试删除
+          # 它，而远端拒绝删除当前分支（"refusing to delete the current branch"），
+          # 整条 push 因此全灭。这个仓库只有 master，prune 的收益是零；将来真在 GitHub
+          # 删了分支，手动 `git push gitee --delete <分支>` 即可。
+          # --force 是镜像语义的一部分：Gitee 侧不允许有本地独有历史。
+          if ! git push --force gitee \
+              "refs/remotes/origin/*:refs/heads/*" \
+              "refs/tags/*:refs/tags/*"; then
+            echo "::error::推送 Gitee 失败。常见原因：仓库不存在、令牌过期或无 projects 权限、Gitee 开了保护分支（拦 force push）、境外 IP 风控。兜底手段是在本机执行同一条 push。"
+            exit 1
+          fi

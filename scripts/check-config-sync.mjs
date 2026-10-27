@@ -402,9 +402,48 @@ if (changelogVersion !== infoVersion) {
 
 const productVersion = infoVersion;
 
+// ---------- 5. Gitee 镜像地址：两个 workflow / README / 页脚四处一致 ----------
+
+// 镜像目标在两个 workflow 里各写一份 env（Actions 的 workflow 之间无法共享变量），
+// README 的下载节与 App.svelte 的页脚又各有一个可点地址。漂移的症状是"镜像推到 A
+// 仓库、文档与页脚指向 B 仓库"——用户点开 404，而 CI 与发版全绿，最难发现的那类错。
+const giteeUrlTarget = (source, where) => {
+  const m = source.match(/https:\/\/gitee\.com\/([\w.-]+)\/([\w.-]+)/);
+  if (!m) fail(`${where} 中找不到 https://gitee.com/<owner>/<repo> 形式的地址`);
+  return `${m[1]}/${m[2]}`;
+};
+
+// workflow 里写的是 env 两行，不是完整 URL。**必须是字面量**：写成
+// `${{ vars.GITEE_OWNER }}` 就不会被这条断言看见，等于绕开了校验。
+const workflowTarget = (source, where) => {
+  const owner = source.match(/^\s*GITEE_OWNER:\s*(\S+)\s*$/m)?.[1];
+  const repo = source.match(/^\s*GITEE_REPO:\s*(\S+)\s*$/m)?.[1];
+  if (!owner || !repo) fail(`${where} 缺少 GITEE_OWNER / GITEE_REPO 字面量`);
+  return `${owner}/${repo}`;
+};
+
+const readmeMd = readFileSync(join(root, "README.md"), "utf8");
+const giteeTargets = [
+  [".github/workflows/mirror.yml", ".github/workflows/mirror.yml"],
+  [".github/workflows/release.yml", ".github/workflows/release.yml"],
+].map(([rel, where]) => [
+  where,
+  workflowTarget(readFileSync(join(root, rel), "utf8").replace(/\r\n/g, "\n"), where),
+]);
+giteeTargets.push(["README.md", giteeUrlTarget(readmeMd, "README.md")]);
+giteeTargets.push(["frontend/src/App.svelte", giteeUrlTarget(appSvelte, "frontend/src/App.svelte")]);
+
+const [giteeWhere, giteePath] = giteeTargets[0];
+for (const [where, path] of giteeTargets.slice(1)) {
+  if (path !== giteePath) {
+    fail(`Gitee 仓库路径不一致：${giteeWhere}=${giteePath}，但 ${where}=${path}`);
+  }
+}
+
 console.log(
   `✓ 配置一致性校验通过：INLINE(${inlineExts.length}) ⊆ VIDEO_TYPES(${videoExts.length})，` +
     `绑定方法 ${goBindings.size} 个两侧一致，事件名 ${eventNames.length} 个两侧一致，` +
     `端口/体积常量与 docs/api.md 复述一致，` +
-    `IP 缓存 TTL 单一来源，预涂底色 ${bgHex} 三处一致，版本号 v${productVersion} 四处一致`,
+    `IP 缓存 TTL 单一来源，预涂底色 ${bgHex} 三处一致，版本号 v${productVersion} 四处一致，` +
+    `Gitee 镜像 ${giteePath} 四处一致`,
 );

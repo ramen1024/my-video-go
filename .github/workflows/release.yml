@@ -108,3 +108,69 @@ jobs:
             --title "视频扫描器 $env:GITHUB_REF_NAME" `
             --generate-notes `
             $env:ASSET
+
+      # 国内用户下载 exe 需要绕开 GitHub，所以 Gitee 侧也建一份发行版（代码镜像由
+      # mirror.yml 负责，这里只补二进制）。
+      #
+      # continue-on-error：Gitee 是镜像，它抖一下不该让 GitHub 的发版变红——tag 已经
+      # 推出去了，把整条 workflow 判失败只会让人以为构建挂了。代价是这一步失败时只在
+      # 自己那一行标红，发完版要顺手扫一眼。
+      #
+      # 幂等：重跑 release workflow 时发行版已经存在（POST 会 400），此时复用现有
+      # 发行版；同名附件已存在也跳过，避免 Gitee 上堆出 file.exe / file_1.exe。
+      - name: 同步发行版到 Gitee
+        continue-on-error: true
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 与 mirror.yml 的 env 同步改（check-config-sync.mjs 断言四处一致）
+          GITEE_OWNER: my_little_world
+          GITEE_REPO: my-video-go
+          GITEE_TOKEN: ${{ secrets.GITEE_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if (-not $env:GITEE_TOKEN) {
+            Write-Host "缺少 secret GITEE_TOKEN，跳过产物镜像"
+            exit 0
+          }
+
+          $api = "https://gitee.com/api/v5/repos/$env:GITEE_OWNER/$env:GITEE_REPO/releases"
+          $auth = "access_token=$env:GITEE_TOKEN"
+
+          try {
+            $rel = Invoke-RestMethod -Uri "$api/tags/$($env:TAG)?$auth" -Method Get
+            Write-Host "Gitee 发行版已存在（id=$($rel.id)），复用"
+          } catch {
+            $notes = gh release view $env:TAG --json body -q .body
+            # 原生命令失败不会触发 ErrorActionPreference，必须自己看退出码
+            if ($LASTEXITCODE -ne 0) { throw "读 GitHub Release 正文失败（gh 退出码 $LASTEXITCODE）" }
+            $payload = @{
+              access_token     = $env:GITEE_TOKEN
+              tag_name         = $env:TAG
+              name             = "视频扫描器 $env:TAG"
+              body             = ($notes -join "`n")
+              # 钉住 commit 而不是 master：重跑旧 tag 时 master 早已前进了
+              target_commitish = $env:GITHUB_SHA
+            } | ConvertTo-Json -Compress
+            # 必须自己转 UTF-8 字节：字符串形式的 -Body 在 Windows PowerShell 下按
+            # ASCII 编码，"视频扫描器" 会变成一串问号
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($payload)
+            $rel = Invoke-RestMethod -Uri $api -Method Post -Body $bytes `
+              -ContentType 'application/json; charset=utf-8'
+            Write-Host "已创建 Gitee 发行版（id=$($rel.id)）"
+          }
+          if (-not $rel.id) { throw "Gitee 未返回发行版 id，响应：$($rel | ConvertTo-Json -Compress)" }
+
+          $assetName = Split-Path $env:ASSET -Leaf
+          if ($rel.assets.name -contains $assetName) {
+            Write-Host "Gitee 发行版已有 $assetName，跳过上传"
+            exit 0
+          }
+
+          # 上传交给 curl.exe：multipart 的 boundary 与文件名编码由它按规范处理，
+          # 不用手搓。Gitee 单附件上限 100 MB，当前 exe 约 13 MB。
+          curl.exe -fsS -X POST "$api/$($rel.id)/attach_files" `
+            -F $auth -F "file=@$env:ASSET" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "上传附件失败（curl 退出码 $LASTEXITCODE）" }
+          Write-Host "已把 $assetName 同步到 Gitee 发行版 $env:TAG"
