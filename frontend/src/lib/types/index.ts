@@ -47,6 +47,16 @@ export interface ScanReport {
   skipped_small_truncated: boolean;
 }
 
+/** 扫描实时进度，对应 Go ScanProgress */
+export interface ScanProgress {
+  /** 是否仍在扫描 */
+  scanning: boolean;
+  /** 已检查的文件条目数（目录不计） */
+  visited: number;
+  /** 已收录的视频数 */
+  found: number;
+}
+
 /** 共享服务器状态，对应 Go ShareStatus（webview 重载后恢复界面用） */
 export interface ShareStatus {
   /** 服务器是否正在运行 */

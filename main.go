@@ -8,6 +8,7 @@ import (
 	"my-video-go/internal/logging"
 	"my-video-go/internal/password"
 	"my-video-go/internal/player"
+	"my-video-go/internal/settings"
 	"my-video-go/internal/share"
 	"my-video-go/internal/state"
 	"os"
@@ -38,12 +39,14 @@ func main() {
 	defer pw.Close()
 
 	st := state.New()
+	// 设置文件读不出来只影响"能否自动恢复上次的目录"，绝不阻断启动
+	store := settings.New(dataDir)
 	dist, err := fs.Sub(assets, "frontend/dist")
 	if err != nil {
 		showFatalError(logPath, fmt.Errorf("前端资源缺失，请重新安装：%w", err))
 	}
 	shareServer := share.New(st, pw, dist)
-	app := NewApp(st, pw, shareServer)
+	app := NewApp(st, pw, shareServer, store)
 
 	// 桌面端内联播放走回环 HTTP 服务器：Wails 资产服务会把响应体全量缓冲进
 	// 内存再交给 WebView2，大视频会无限转圈（见 internal/player 包注释）。
@@ -67,6 +70,20 @@ func main() {
 			// 桌面端 CSP：Wails v2 没有 CSP 配置项，只能靠中间件注入。
 			// 见 desktop_csp.go 的说明（含 media-src 必须放行回环地址的原因）。
 			Middleware: desktopCSPMiddleware,
+		},
+		DragAndDrop: &options.DragAndDrop{
+			// 拖入文件夹直接扫描。路径由 WebView2 的
+			// postMessageWithAdditionalObjects 解析，需要运行时
+			// >= 1.0.1774.30；更旧的版本上拖放静默无效，其余功能不受影响。
+			//
+			// **不要**同时开 DisableWebViewDrop：它对应的不是"再保险一点"，
+			// 而是 WebView2 的 PutAllowExternalDrop(false)——把外部拖放整个
+			// 关掉，JS 连 dragover/drop 都收不到，Wails 的路径解析也就无从
+			// 触发（拖进去毫无反应）。两者是互斥方案，不是双保险。
+			// 阻止"拖入 .mp4 后 webview 就地导航到那个文件"的，是 Wails
+			// 运行时在 dragover/drop 上的 preventDefault（它在前端调用
+			// window.runtime.OnFileDrop 之后才注册，见 desktop.ts）。
+			EnableFileDrop: true,
 		},
 		OnStartup:  app.startup,
 		OnShutdown: app.shutdown,

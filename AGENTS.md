@@ -70,7 +70,15 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   逃逸分析放不到栈上 → 每个字段一次堆分配。**不要**把它"优化"成 `io.WriteString`：
   2000 条列表的分配会从 3 次跳到 4004 次（对照基准见 `internal/models/etag_bench_test.go`）
 - `scanner/` — `Scan`（WalkDir、白名单小写比较、1MiB 报告制、不跟随符号链接、
-  拒绝根目录、取消）与 `ScanAndStore`（ScanGuard 互斥 + 原子替换列表）。排序走
+  拒绝根目录、取消、**节流进度回调**）与 `ScanAndStore`（ScanGuard 互斥 + 原子替换
+  列表 + 发布进度）。进度回调的节流条件是"**或**"不是"与"：每 200 条 **或**
+  每 100ms。快盘靠条目数保持均匀；慢盘/网络共享上 200 条要好几秒，此时必须由
+  时间兜底，否则进度会在最需要它的场景里纹丝不动。`visited` 只统计**非目录**
+  条目（用户理解的是"扫了多少个文件"），且必须声明在 `walkRoots` 循环**外**——
+  重解析点根目录会把它重置成 0，界面上的数字会跳回去。
+  **终态计数必须由 `ScanAndStore` 用 `res.Visited` 补齐，不能只依赖回调**：
+  小目录（不足 200 条且扫得比 100ms 快）一次回调都不会触发，只靠回调会让收尾
+  显示"扫描完成、0 项、0 个视频"。排序走
   `sortByNameLower`（预计算小写键 + 只排序索引）；
   **不要**改回比较器里调 `strings.ToLower`（每次比较分配两个临时字符串，分配量随
   n log n 增长）。性能数字请现测而不是引用注释：`go test -bench SortByNameLower ./internal/scanner/`
@@ -86,6 +94,15 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   字段：`Enabled()` 在 `withAuth` 的每请求路径上（含每个视频 Range），走 mu 会让
   整站请求排在 Argon2id（~25ms）与配置落盘后面。`TestEnabledIsLockFree` 锁定这一点，
   **不要**把它改回受 `mu` 保护
+- `settings/` — `settings.json`（与 `password_config.json` 同目录，0600，
+  tmp+Sync+rename 原子写）只存**上次成功扫描的文件夹**，用于启动时自动恢复列表。
+  与 `password` 的取舍相反：这里损坏**只记 Warn 并回到默认值**，绝不阻断启动——
+  它最坏的结果只是"少一次自动恢复"，而密码配置损坏是安全事件。
+  `SetLastFolder` 对同一路径重复调用直接返回（开共享会再扫一次同一目录），
+  写失败必须**回滚内存值**：不回滚的话下次同路径调用会因"看起来没变"而跳过，
+  这个错误就再也没有重试机会了（`TestSetLastFolderRollsBackOnWriteFailure`）。
+  `LastFolder()` 只返回记录值、**不校验目录是否还存在**——那会让"U 盘拔了"
+  表现为"设置被清了"
 - `share/` — 内嵌 HTTP 服务器：`Handler()` 组装 安全头 → gzip → Host 校验 → CSRF →
   会话鉴权 → 路由；
   `ResolveVideoPath` 是桌面端与网页端共用的路径解析/校验；`VideoHandler` 是两端共用的
@@ -108,7 +125,9 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 - `player/` — 桌面端内联播放专用的**回环 HTTP 服务器**（127.0.0.1 随机端口，
   只路由 `/video/` 到 `share.VideoHandler`）
 - `state/` — AppState：atomic.Pointer 快照（**列表+ETag+共享目录三元组**、共享信息、
-  刷新结果）、服务器状态机（Stopped→Starting→Running→Stopping）、扫描/刷新 CAS 守卫。
+  刷新结果、**扫描进度**）、服务器状态机（Stopped→Starting→Running→Stopping）、
+  扫描/刷新 CAS 守卫。`ScanProgress` 的零值就是"没扫过/扫完了"（`scanning=false`），
+  前端不必区分这两种状态。
   列表与目录必须**一次发布**（`SetScanResult`）：分成两个 atomic 会有窗口，让
   `/video/*` 拿新列表的 relative_path 去解析旧根目录而得到伪 404
 - `localips/` — 本机全局 IPv4 枚举（5 分钟缓存，过滤回环/链路本地）。缓存 TTL 直接用
@@ -185,6 +204,30 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   会断言产物无内联脚本。若升级构建工具后产物出现内联脚本，白屏会在运行时才暴露——
   改 CSP 的同时必须同步该检查。既是常量也是**桌面端策略的派生源**（见下条），
   因此导出——改名时要一起看 `desktop_csp.go`
+- **拖放文件夹必须由前端调用 `window.runtime.OnFileDrop`**：Go 侧的
+  `runtime.OnFileDrop` 只订阅 `wails:file-drop` 事件，真正把 WebView2 解析出的
+  绝对路径发出来的是 JS 侧在 `window.runtime.OnFileDrop()` 被调用后才挂上的
+  dragover/drop 监听器。只写 Go 侧会表现为"拖放看着接了、永远收不到"。
+  `main.go` 只开 `DragAndDrop.EnableFileDrop`，**绝不能同时开
+  `DisableWebViewDrop`**：后者对应 WebView2 的 `PutAllowExternalDrop(false)`，
+  会把外部拖放整个关掉（JS 连 dragover/drop 都收不到），与 `EnableFileDrop`
+  是互斥方案而不是"双保险"。防止拖入 `.mp4` 时 webview 就地导航的，是 Wails
+  运行时在 dragover/drop 上的 `preventDefault`（同样依赖前端调用 OnFileDrop）。
+  `OnFileDrop` 的 JS 实现带 `registered` 标志、**只能注册一次**，所以
+  `desktop.ts` 常驻一份注册、按"当前订阅者"转发。
+  **只接受文件夹**：拖入单个视频时最自然的语义是"打开这部片子"，而本应用以目录
+  为单位扫描——替用户扫它所在的目录，等于把桌面上的一个电影文件变成扫描整个桌面
+  （上万条目、几十秒读盘）。类型过滤在 Go 侧（`App.ResolveDroppedFolder`），
+  因为 JS 的 `File` 对象不带 `isDirectory`：拖文件夹时 `dataTransfer.files` 里
+  那条记录的 `type` 为空，与"无扩展名的文件"无法区分。
+  遮罩必须 `pointer-events: none`，并用进出**计数**抵消 `dragleave` 的逐层触发
+  （直接置 false 会疯狂闪烁）
+- **桌面端扫描进度靠轮询 `GetScanProgress`，不是事件推送**：扫描跑在调用
+  `ScanVideos` 的那个 goroutine 里，事件通道要额外维护订阅/退订，还要处理
+  "扫描已结束、事件仍在路上"的竞态；250ms 一次的轮询与一次重绘同量级。
+  网页端则复用 `/refresh-status` 的 `progress` 字段（两个分支都带）。
+  **进度只含计数、不含当前目录**：它会经 HTTP 发给网页端，而共享方电脑的目录
+  结构不在对外承诺之内
 - **打开外部链接必须走 `platform.openExternal`，不能写成 `<a href>`**：桌面端跑在
   Wails webview 里，普通链接会让**应用自己**就地导航到目标站点——整页变成网页、
   SPA 状态全丢，而且没有"返回"可点。`openExternal` 在桌面端交给系统浏览器

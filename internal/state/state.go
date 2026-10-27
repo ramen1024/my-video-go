@@ -47,6 +47,7 @@ type AppState struct {
 
 	cancelScan     atomic.Bool
 	scanInProgress atomic.Bool // CAS 守卫：桌面扫描与网页 /refresh 互斥
+	scanProgress   atomic.Pointer[models.ScanProgress]
 
 	refreshInProgress atomic.Bool
 	refreshCooldown   atomic.Bool
@@ -149,6 +150,25 @@ func (s *AppState) CancelScan() {
 
 func (s *AppState) CancelFlag() *atomic.Bool {
 	return &s.cancelScan
+}
+
+// ---- 扫描进度 ----
+
+// SetScanProgress 发布一次进度快照（扫描期间每 ~100ms 一次）。
+//
+// 值类型入参、内部取地址：调用方手里的结构体随后可以继续改，不会影响已发布的
+// 快照——这与 SetScanResult 的"整体替换"是同一个思路。
+func (s *AppState) SetScanProgress(p models.ScanProgress) {
+	s.scanProgress.Store(&p)
+}
+
+// ScanProgress 返回最近一次扫描进度；从未扫描过时是零值（scanning=false，
+// 两个计数均为 0）。零值语义让前端不必区分"没扫过"与"扫完了"。
+func (s *AppState) ScanProgress() models.ScanProgress {
+	if p := s.scanProgress.Load(); p != nil {
+		return *p
+	}
+	return models.ScanProgress{}
 }
 
 // ---- 网页端刷新（/refresh + /refresh-status）----

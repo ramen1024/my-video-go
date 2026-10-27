@@ -59,14 +59,31 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 // handleRefreshStatus 返回最近一次刷新的结果。
 // pending=true 表示"本次刷新尚无结果"（前端只依赖该字段，不解析 message 文案）。
+//
+// 两个分支都附带 `progress`：pending 时它是"正在扫到哪了"，有结果时是这次扫描的
+// 终态计数。手机端点了"重新扫描电脑"之后要盯着几十秒，只回一句"正在扫描"等于
+// 让用户猜它是不是卡死了（见 internal/models.ScanProgress 的字段说明）。
 func (s *Server) handleRefreshStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
+	progress := s.st.ScanProgress()
+
 	if result, ok := s.st.RefreshResult(); ok {
-		writeRawJSON(w, http.StatusOK, result)
+		// 结果串由 refreshResultJSON 生成，字段是顶层的 success/total/message。
+		// 这里解成 map 再补一个字段，而不是改 refreshResultJSON——保持那个函数
+		// 是"一次扫描结果的纯描述"，进度的来源只有 state 一处。
+		var m map[string]any
+		if err := json.Unmarshal([]byte(result), &m); err != nil {
+			// 本进程自己生成的 JSON 解不开说明内存里已经坏了；原样回传至少不丢信息
+			writeRawJSON(w, http.StatusOK, result)
+			return
+		}
+		m["progress"] = progress
+		writeJSON(w, http.StatusOK, m)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true, "pending": true, "message": "无刷新记录",
+		"progress": progress,
 	})
 }
 

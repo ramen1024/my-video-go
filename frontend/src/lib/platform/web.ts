@@ -5,7 +5,7 @@
  * 与桌面端（Wails 绑定）共用 [`Platform`] 接口。接口契约见 docs/api.md。
  */
 
-import type { ScanReport } from "$lib/types";
+import type { ScanProgress, ScanReport } from "$lib/types";
 import type { Platform, VideoItem } from "./types";
 
 /** 与 Go `VideoFile` 对应：HTTP 响应不携带本机绝对路径（模型里本来就没有） */
@@ -25,6 +25,8 @@ interface RefreshStatus {
   total?: number;
   /** 因小于最小体积被跳过的文件数量 */
   skipped_small_count?: number;
+  /** 扫描进度（pending 与已出结果两种响应都带） */
+  progress?: ScanProgress;
 }
 
 const VIDEO_LIST_PATH = "/videos";
@@ -152,7 +154,9 @@ async function loadVideosFromServer(): Promise<VideoItem[]> {
 }
 
 /** 触发重新扫描并等待结果 */
-async function rescanOnServer(): Promise<{ videos: VideoItem[]; report: ScanReport }> {
+async function rescanOnServer(
+  onProgress?: (progress: ScanProgress) => void,
+): Promise<{ videos: VideoItem[]; report: ScanReport }> {
   // 用 POST：改状态的请求不该是 GET，避免浏览器预取/扫描器类行为误触发重扫
   const { data } = await requestJson(REFRESH_PATH, { method: "POST" });
   if (!data.success) {
@@ -164,8 +168,10 @@ async function rescanOnServer(): Promise<{ videos: VideoItem[]; report: ScanRepo
     const { data: status } = await requestJson(REFRESH_STATUS_PATH);
     // pending 表示后端还没有本次刷新的结果，继续轮询；
     // 不依赖 message 文案，避免后端改提示语导致这里误判
-    if (!status.pending) {
-      const result = status as RefreshStatus;
+    const result = status as RefreshStatus;
+    // 手机端点了"重新扫描电脑"之后要盯几十秒，进度是这段等待里唯一的反馈
+    if (onProgress && result.progress) onProgress(result.progress);
+    if (!result.pending) {
       if (!result.success) {
         throw new Error(result.message || "刷新失败，请重试");
       }
@@ -198,6 +204,7 @@ export const web: Platform = {
   canShare: false,
   canCancelScan: false,
   canOpenWithSystemPlayer: false,
+  canDropFolder: false,
   listPollIntervalMs: 30_000,
   // 扫描跑在共享方那台电脑上——本文件唯一"操作别人设备"的能力，
   // 调用方必须据此换文案并加二次确认（见 App.svelte 的 requestScan）
@@ -208,12 +215,23 @@ export const web: Platform = {
     return null;
   },
 
+  async getLastFolder() {
+    // "上次扫描的文件夹"是共享方电脑上的概念，浏览器这边没有可恢复的本地状态
+    return null;
+  },
+
+  onFolderDrop() {
+    // 浏览器拿不到拖入项的绝对路径（File 只有文件名），因此整个拖放能力不存在；
+    // canDropFolder 为 false，UI 不会渲染相关提示
+    return () => {};
+  },
+
   async init() {
     // 网页端无需初始化（videoSrc 的 /video/ 路径是自包含的）
   },
 
-  async rescan() {
-    return await rescanOnServer();
+  async rescan(_folder, onProgress) {
+    return await rescanOnServer(onProgress);
   },
 
   async loadVideos() {

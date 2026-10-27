@@ -40,6 +40,18 @@ type ScanReport struct {
 	SkippedSmallTruncated bool          `json:"skipped_small_truncated"`
 }
 
+// ScanProgress 是一次扫描的实时进度（扫描期间由前端轮询）。
+//
+// 只暴露**计数**，刻意不含"当前正在扫的目录"：这份数据也会经
+// `/refresh-status` 发给网页端，而共享方电脑的目录结构不在对外承诺之内
+// （README：手机端只能看到文件名，看不到完整路径）。计数足以证明"它在动"，
+// 那是这个结构存在的唯一理由。
+type ScanProgress struct {
+	Scanning bool  `json:"scanning"`
+	Visited  int64 `json:"visited"` // 已检查的文件条目数（目录不计）
+	Found    int64 `json:"found"`   // 已收录的视频数
+}
+
 // RecordSkippedSmall 记录一个被跳过的过小文件，明细超过
 // constants.MaxSkippedFilesReported 后只累计数量并置 truncated 标记。
 func (r *ScanReport) RecordSkippedSmall(f SkippedFile) {

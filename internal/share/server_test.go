@@ -589,6 +589,53 @@ func TestRefreshFlow(t *testing.T) {
 	}
 }
 
+// /refresh-status 必须在**两种**响应里都带 `progress`。
+//
+// 手机端点了"重新扫描电脑"之后要盯几十秒，这段等待里唯一的反馈就是它；
+// 字段名一旦漂移，前端会静默退化成"只有转圈"（不报错、不白屏，只是没人发现）。
+// pending 分支是现拼的 map、有结果分支是把存下的 JSON 解成 map 再注入，
+// 两条路径的实现完全不同，所以必须各测一次。
+func TestRefreshStatusCarriesProgress(t *testing.T) {
+	s, st := newTestServer(t, false)
+
+	// pending 分支
+	want := models.ScanProgress{Scanning: true, Visited: 42, Found: 7}
+	st.SetScanProgress(want)
+	w := doReq(s, "GET", "/refresh-status", "", "", nil)
+	var pending struct {
+		Pending  bool                `json:"pending"`
+		Progress models.ScanProgress `json:"progress"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &pending); err != nil {
+		t.Fatalf("解析失败: %v (%s)", err, w.Body.String())
+	}
+	if !pending.Pending {
+		t.Fatalf("初始应 pending: %s", w.Body.String())
+	}
+	if pending.Progress != want {
+		t.Fatalf("pending 的 progress = %+v，期望 %+v", pending.Progress, want)
+	}
+
+	// 已出结果分支：结果串是预序列化的，progress 由 handler 注入
+	st.SetRefreshResult(`{"success":true,"message":"视频列表已刷新","total":7}`)
+	st.SetScanProgress(models.ScanProgress{Scanning: false, Visited: 99, Found: 7})
+	w = doReq(s, "GET", "/refresh-status", "", "", nil)
+	var done struct {
+		Success  bool                `json:"success"`
+		Total    int                 `json:"total"`
+		Progress models.ScanProgress `json:"progress"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &done); err != nil {
+		t.Fatalf("解析失败: %v (%s)", err, w.Body.String())
+	}
+	if !done.Success || done.Total != 7 {
+		t.Fatalf("原有字段必须原样保留: %s", w.Body.String())
+	}
+	if done.Progress.Scanning || done.Progress.Visited != 99 || done.Progress.Found != 7 {
+		t.Fatalf("终态 progress 不符: %+v", done.Progress)
+	}
+}
+
 // waitRefreshDone 轮询等待刷新 goroutine 写入结果（测试确定性辅助）。
 func waitRefreshDone(t *testing.T, st *state.AppState) {
 	t.Helper()

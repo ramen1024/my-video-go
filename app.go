@@ -10,6 +10,7 @@ import (
 	"my-video-go/internal/password"
 	"my-video-go/internal/player"
 	"my-video-go/internal/scanner"
+	"my-video-go/internal/settings"
 	"my-video-go/internal/share"
 	"my-video-go/internal/state"
 	neturl "net/url"
@@ -23,15 +24,16 @@ import (
 // App 是绑定给前端的方法集。前端通过 window.go.main.App.<方法> 调用，
 // 错误以 err.Error() 字符串出现在 Promise reject 中。
 type App struct {
-	ctx    context.Context
-	st     *state.AppState
-	pw     *password.Manager
-	share  *share.Server
-	player *player.Server
+	ctx      context.Context
+	st       *state.AppState
+	pw       *password.Manager
+	share    *share.Server
+	player   *player.Server
+	settings *settings.Store
 }
 
-func NewApp(st *state.AppState, pw *password.Manager, shareServer *share.Server) *App {
-	return &App{st: st, pw: pw, share: shareServer}
+func NewApp(st *state.AppState, pw *password.Manager, shareServer *share.Server, store *settings.Store) *App {
+	return &App{st: st, pw: pw, share: shareServer, settings: store}
 }
 
 // startup 由 Wails 在应用就绪时调用，之后才能使用对话框/浏览器等运行时能力。
@@ -64,13 +66,43 @@ func (a *App) shutdown(ctx context.Context) {
 
 // ScanVideos 扫描文件夹并写入全局状态，返回扫描报告（列表经 GetSharedVideos 获取）。
 func (a *App) ScanVideos(folderPath string) (models.ScanReport, error) {
-	// 成功路径**不写日志**：扫描完成是正常操作，本应用是个人工具，
-	// 每次扫描都记一条 Info 只会把真正有用的事故记录埋掉（见 logging 包注释）。
+	return a.scanAndRemember(folderPath)
+}
+
+// scanAndRemember 是"扫描 + 记住目录"的统一通路（桌面扫描与开启共享都走它）。
+//
+// 成功路径**不写日志**：扫描完成是正常操作，本应用是个人工具，每次扫描都记
+// 一条 Info 只会把真正有用的事故记录埋掉（见 logging 包注释）。
+//
+// 记住目录是**尽力而为**：写盘失败（权限/磁盘满）不该把一次成功的扫描变成错误
+// ——用户这一次仍然看得到列表，只是下次要重新选。因此只记一条 Warn。
+func (a *App) scanAndRemember(folderPath string) (models.ScanReport, error) {
 	report, err := scanner.ScanAndStore(a.st, folderPath, a.st.CancelFlag())
 	if err != nil {
 		return models.ScanReport{}, err
 	}
+	if err := a.settings.SetLastFolder(folderPath); err != nil {
+		slog.Warn("保存上次扫描的文件夹失败，下次启动将无法自动恢复", "err", err)
+	}
 	return *report, nil
+}
+
+// GetLastFolder 返回上次成功扫描的文件夹，供启动时自动恢复列表。
+//
+// 只返回记录值、**不校验目录是否还存在**：校验失败就返回空串会把"U 盘拔了"
+// 变成"设置被清了"，插回去就找不回来。路径不可用时前端会收到扫描错误，
+// 那时给一条中性的"上次的文件夹已无法访问"比静默清空更诚实。
+func (a *App) GetLastFolder() string {
+	return a.settings.LastFolder()
+}
+
+// GetScanProgress 返回扫描进度，扫描期间由前端每 ~250ms 轮询一次。
+//
+// 走"前端轮询绑定方法"而不是 Wails 事件推送：扫描本身跑在调用 ScanVideos 的
+// 那个 goroutine 里，事件通道要额外维护订阅/退订，还要处理"扫描已结束、事件
+// 仍在路上"的竞态；而这里的调用频率与一次重绘同量级。
+func (a *App) GetScanProgress() models.ScanProgress {
+	return a.st.ScanProgress()
 }
 
 // GetSharedVideos 返回当前视频列表（未扫描过时为空数组）。
@@ -164,7 +196,7 @@ func (a *App) StartShareServer(folderPath string, port int) (models.ShareServerI
 	if err := a.st.StartServerStarting(); err != nil {
 		return models.ShareServerInfo{}, err
 	}
-	if _, err := scanner.ScanAndStore(a.st, folderPath, a.st.CancelFlag()); err != nil {
+	if _, err := a.scanAndRemember(folderPath); err != nil {
 		a.st.SetServerStopped()
 		return models.ShareServerInfo{}, err
 	}
@@ -231,6 +263,24 @@ func (a *App) PickFolder() (string, error) {
 		return "", err
 	}
 	return dir, nil
+}
+
+// ResolveDroppedFolder 从拖入的路径里挑出第一个**文件夹**，没有则返回空串。
+//
+// 过滤放在 Go 侧：WebView2 交给前端的是绝对路径字符串，而 JS 的 File 对象
+// 不带 isDirectory（拖文件夹时 dataTransfer.files 里那条记录 type 为空，
+// 与"无扩展名的文件"无法区分）。
+//
+// **只接受文件夹**是刻意的：拖入单个视频时最自然的语义是"打开这部片子"，
+// 而本应用的模型是"扫描一个目录"——若替用户扫它所在的目录，桌面上的一个
+// 电影文件就会演变成扫描整个桌面（上万条目、几十秒读盘），用户完全预期不到。
+func (a *App) ResolveDroppedFolder(paths []string) string {
+	for _, p := range paths {
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			return p
+		}
+	}
+	return ""
 }
 
 // OpenURL 用系统浏览器打开链接（共享面板的访问地址）。

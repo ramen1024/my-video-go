@@ -6,7 +6,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { platform, type VideoItem } from "$lib/platform";
-  import type { PasswordStatus, ScanReport, ShareServerInfo } from "$lib/types";
+  import type { PasswordStatus, ScanProgress, ScanReport, ShareServerInfo } from "$lib/types";
   import { parseAppError } from "$lib/types";
   import { DEFAULT_SHARE_PORT, MIN_VIDEO_FILE_SIZE_BYTES } from "$lib/config";
   import { formatFileSize } from "$lib/utils/format";
@@ -81,6 +81,44 @@
    * 因此这个标志只在网页端真正起作用，但两边共用同一份状态机。
    */
   let hasLoadedOnce = $state(false);
+  /**
+   * 扫描进度
+   *
+   * 只在 isScanning 为真时有意义。刻意**不画百分比进度条**：WalkDir 事先不知道
+   * 总数，任何百分比都是编的；"已检查 N 个文件 · 找到 M 个视频"是这段时间里
+   * 唯一诚实的信息，也足以证明它没卡死。
+   */
+  let scanProgress = $state<ScanProgress>({ scanning: false, visited: 0, found: 0 });
+  /** 有文件正被拖过窗口（仅桌面端，用于遮罩） */
+  let isDragOver = $state(false);
+  /**
+   * 拖拽进入/离开的层数计数
+   *
+   * dragleave 在子元素之间移动时会**逐层**触发（每穿过一层 DOM 边界就来一次），
+   * 直接用它置 false 会让遮罩疯狂闪烁；用进出计数抵消。drop 时统一归零，避免
+   * 某一次 enter 没配上 leave 把遮罩永久卡住。
+   */
+  let dragDepth = 0;
+
+  /** 千分位整数：上万条的目录里"已检查 12345 个文件"是一串糊在一起的字 */
+  function formatCount(n: number): string {
+    return n.toLocaleString("zh-CN");
+  }
+
+  /**
+   * 把某个目录切成当前目录并扫描（选择框、拖放、启动恢复共用）
+   *
+   * 三处入口只在这里收敛一次，否则"换目录时要不要清空列表"这类决定会被写成
+   * 三份，迟早分叉。
+   */
+  async function useFolder(folder: string) {
+    // 换文件夹时先清空列表，避免扫描失败后残留上一个文件夹的内容；
+    // 刷新同一个文件夹时保留旧列表，扫描完成后整体覆盖，避免界面闪空
+    if (folder !== currentFolder) videos = [];
+    currentFolder = folder;
+    currentVideo = null;
+    await doScan();
+  }
 
   async function selectFolder() {
     // 原生目录对话框是模态的但调用可重入：连点两次会开出两个对话框，
@@ -90,12 +128,7 @@
     try {
       const selected = await platform.pickFolder();
       if (!selected) return;
-      // 换文件夹时先清空列表，避免扫描失败后残留上一个文件夹的内容；
-      // 刷新同一个文件夹时保留旧列表，扫描完成后整体覆盖，避免界面闪空
-      if (selected !== currentFolder) videos = [];
-      currentFolder = selected;
-      currentVideo = null;
-      await doScan();
+      await useFolder(selected);
     } catch (e) {
       errorMsg = "选择文件夹失败: " + parseAppError(e);
     } finally {
@@ -125,7 +158,15 @@
     void doScan();
   }
 
-  async function doScan() {
+  /**
+   * 扫描当前目录
+   *
+   * `restoring` 标记"启动时自动恢复上次目录"那一次调用。它的失败**不能**按
+   * 普通扫描失败处理：用户什么都没点，却在启动瞬间看到一条红色"扫描失败"，
+   * 只会以为程序坏了。那种情况回空状态并给一条中性提示（目录被删、移动硬盘
+   * 没插上，都会走到这里）。
+   */
+  async function doScan(options: { restoring?: boolean } = {}) {
     if (platform.canPickFolder && !currentFolder) return;
     // 轮询/误触都可能让本函数重入；ScanGuard 会拒绝并发扫描并报"扫描正在进行中"，
     // 但那句提示不该被用户看到——重复点击本就该是无声的
@@ -134,16 +175,31 @@
     errorMsg = "";
     noticeMsg = "";
     noticeDetail = "";
+    scanProgress = { scanning: true, visited: 0, found: 0 };
     try {
-      const { videos: next, report } = await platform.rescan(currentFolder);
+      const { videos: next, report } = await platform.rescan(currentFolder, (p) => {
+        scanProgress = p;
+      });
       videos = next;
       noticeMsg = describeSkipped(report);
       noticeDetail = describeSkippedDetail(report);
     } catch (e) {
       const msg = parseAppError(e);
-      errorMsg = msg.includes("扫描已取消") ? "扫描已取消" : "扫描失败: " + msg;
+      if (msg.includes("扫描已取消")) {
+        errorMsg = "扫描已取消";
+      } else if (options.restoring) {
+        currentFolder = "";
+        videos = [];
+        noticeMsg = `上次的文件夹已无法访问（${msg}），请重新选择`;
+      } else {
+        errorMsg = "扫描失败: " + msg;
+      }
     } finally {
       isScanning = false;
+      // 扫描结束（无论成功、失败还是取消）都算"数据已经到过一次"：
+      // 否则扫描一个空目录后，界面会永远停在"正在载入视频列表…"而不是
+      // 诚实地显示"没有视频"。
+      hasLoadedOnce = true;
     }
   }
 
@@ -332,11 +388,99 @@
     }
   }
 
+  /**
+   * 恢复上次扫描的文件夹并自动重扫（仅桌面端）
+   *
+   * 后端状态（AppState）是纯内存的，进程退出即清空。没有这一步，每次重开应用
+   * 都是"空状态 → 重新选目录 → 重扫几十秒"——用户第二次打开就会觉得这软件
+   * 老让他干活。
+   *
+   * **自动扫描**是刻意的：只把路径记下来、还要用户再点一次"重新扫描"，等于把
+   * 这个功能做了一半。
+   *
+   * 只在后端没有运行中目录时调用：webview 重载走 restoreBackendState（状态还在
+   * 内存里），那时再扫一次纯属浪费。
+   */
+  async function restoreLastFolder() {
+    // 读设置期间保持"加载中"：restoreBackendState 已经把 hasLoadedOnce 置真，
+    // 不改的话会先闪一下"请选择文件夹"，紧接着又跳到"正在扫描"。
+    // 读不到就恢复成"已加载"（那是真的没有可恢复的内容），交给下面两个出口。
+    hasLoadedOnce = false;
+
+    let last: string | null = null;
+    try {
+      last = await platform.getLastFolder();
+    } catch (e) {
+      // 读设置失败只影响"自动恢复"，不该在启动时弹错误
+      console.error("读取上次的文件夹失败:", e);
+      hasLoadedOnce = true;
+      return;
+    }
+    if (!last) {
+      hasLoadedOnce = true;
+      return;
+    }
+    currentFolder = last;
+    // doScan 的 finally 会把 hasLoadedOnce 置回真
+    await doScan({ restoring: true });
+  }
+
+  /** 拖入文件夹：直接切过去并扫描（仅桌面端，由 canDropFolder 守卫） */
+  async function handleDroppedFolder(folder: string) {
+    if (isScanning) {
+      // 扫描中换目录会被 ScanGuard 拒绝，但那句"扫描正在进行中"对用户毫无意义
+      noticeMsg = "正在扫描，请等这次扫描结束后再拖入文件夹";
+      return;
+    }
+    await useFolder(folder);
+  }
+
+  /**
+   * 拖入的不是文件夹
+   *
+   * 最常见的动作是拖一个视频文件进来——以为"能直接播这个片子"。必须把规则说清楚：
+   * 扫描以目录为单位，替用户扫它所在的目录会变成扫整个桌面。
+   */
+  function handleDroppedNonFolder() {
+    noticeMsg = "请拖动文件夹：单个文件无法确定该扫描哪个目录";
+  }
+
+  function handleWindowDragEnter(e: DragEvent) {
+    if (!platform.canDropFolder) return;
+    // 只看文件拖拽（与 Wails 运行时内部的判据一致）
+    if (!e.dataTransfer?.types.includes("Files")) return;
+    dragDepth += 1;
+    isDragOver = true;
+  }
+
+  function handleWindowDragLeave() {
+    if (!platform.canDropFolder) return;
+    dragDepth = Math.max(0, dragDepth - 1);
+    if (dragDepth === 0) isDragOver = false;
+  }
+
+  function handleWindowDrop() {
+    // 与 enter/leave 的计数无关，一律归零：宁可少一次遮罩，也不要它卡在屏幕上
+    dragDepth = 0;
+    isDragOver = false;
+  }
+
   onMount(async () => {
     // 平台初始化（桌面端预取回环视频服务器端口，videoSrc 依赖它）
     await platform.init();
+
+    if (platform.canDropFolder) {
+      // 根组件与进程同生命周期，无需退订；返回的取消函数留给将来可能的换订阅者
+      platform.onFolderDrop({
+        onFolder: (folder) => { void handleDroppedFolder(folder); },
+        onRejected: handleDroppedNonFolder,
+      });
+    }
+
     if (isDesktop) {
       await restoreBackendState();
+      // 后端没有在跑的目录（正常启动，而非 webview 重载）：从设置里恢复
+      if (!currentFolder) await restoreLastFolder();
       try {
         passwordStatus = await platform.getPasswordStatus();
       } catch (e) {
@@ -370,7 +514,31 @@
   });
 </script>
 
+<!--
+  全局拖拽监听：只在桌面端有意义（canDropFolder），网页端的处理函数会立即返回。
+  放在这里而不是 main 上：拖到窗口任意位置都该有反馈，包括页脚与留白处。
+-->
+<svelte:window
+  ondragenter={handleWindowDragEnter}
+  ondragleave={handleWindowDragLeave}
+  ondrop={handleWindowDrop}
+/>
+
 <main class="app">
+  {#if isDragOver}
+    <!--
+      拖拽遮罩：纯视觉反馈，drop 本身由平台层（Wails 运行时）处理。
+      aria-hidden：它没有可操作内容，读屏器念一遍"松手即扫描"只会打断当前上下文。
+    -->
+    <div class="drop-overlay" aria-hidden="true">
+      <div class="drop-card">
+        <svg xmlns="http://www.w3.org/2000/svg" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+        <p class="drop-title">松手即扫描这个文件夹</p>
+        <p class="drop-note">当前的视频列表会被替换</p>
+      </div>
+    </div>
+  {/if}
+
   {#if currentVideo}
     <!--
       {#key} 强制重建播放器：切换视频时同一位置的 {#if} 不会销毁组件，
@@ -448,6 +616,17 @@
       <div class="loading" role="status" aria-live="polite">
         <div class="spinner"></div>
         <p>正在扫描视频文件…</p>
+        {#if scanProgress.visited > 0}
+          <!--
+            aria-hidden：外层是 role="status"（隐含 aria-live="polite"），而这个
+            数字每 250ms 变一次——读屏器会不停播报"已检查 1234 个文件"，反而让
+            界面不可用。进度是视觉反馈，读屏用户靠"取消扫描"按钮与结束后的
+            列表变化获知状态。
+          -->
+          <p class="scan-count" aria-hidden="true">
+            已检查 {formatCount(scanProgress.visited)} 个文件 · 找到 {formatCount(scanProgress.found)} 个视频
+          </p>
+        {/if}
         {#if platform.canCancelScan}
           <button class="btn btn-danger" onclick={handleCancelScan}>取消扫描</button>
         {/if}
@@ -467,6 +646,10 @@
         <svg xmlns="http://www.w3.org/2000/svg" width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="2" width="20" height="20" rx="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line><line x1="17" y1="17" x2="22" y2="17"></line></svg>
         {#if platform.canPickFolder}
           <p>请选择文件夹以扫描视频文件</p>
+          {#if platform.canDropFolder}
+            <!-- 拖放的可发现性几乎为零：不写这一句，没有人会去试 -->
+            <p class="empty-hint">也可以把文件夹直接拖进窗口</p>
+          {/if}
           <!-- 空状态直接给出下一步：只有一个图标的空白页会让人不知道从哪开始 -->
           <button class="btn btn-primary" onclick={selectFolder} disabled={isPicking || isScanning}>
             {isPicking ? "选择中…" : "选择文件夹"}
@@ -660,6 +843,56 @@
 
   .loading p {
     font-size: var(--fs-md);
+  }
+
+  /* 扫描计数：比"正在扫描"弱一级——它是佐证，不是主信息。
+     负 margin 让两行贴近成一组（.loading 的 gap 是 16px）。 */
+  .scan-count {
+    margin-top: -6px;
+    font-size: var(--fs-sm);
+    color: var(--text-tertiary);
+    /* 等宽数字：这个值每 250ms 变一次，比例字体下整行会左右轻微抖动 */
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* 拖拽遮罩：整页压暗，中间一张"松手即扫描"的卡片。
+     pointer-events: none 必须保留——它只是视觉层，事件要能穿透到下面
+     （Wails 运行时的 drop 判据会做 elementFromPoint 之类的检查）。 */
+  .drop-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* scrim 就是"整页压暗"这个语义的令牌（--bg 的低透明度版本） */
+    background: var(--scrim);
+    pointer-events: none;
+  }
+
+  .drop-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 28px 40px;
+    background: var(--surface);
+    /* 虚线是"投放区"的通用视觉语言，实线会读成一张普通卡片 */
+    border: 1px dashed var(--accent-border-strong);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-lg);
+    color: var(--accent-light);
+  }
+
+  .drop-title {
+    font-size: var(--fs-lg);
+    font-weight: 600;
+    color: var(--text-strong);
+  }
+
+  .drop-note {
+    font-size: var(--fs-sm);
+    color: var(--text-tertiary);
   }
 
   .spinner {

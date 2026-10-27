@@ -9,13 +9,14 @@
 
 import type {
   PasswordStatus,
+  ScanProgress,
   ScanReport,
   ShareServerInfo,
   ShareStatus,
   VideoFile,
 } from "$lib/types";
 import { isInlinePlayableContainer } from "$lib/utils/format";
-import type { Platform, VideoItem } from "./types";
+import type { FolderDropHandlers, Platform, VideoItem } from "./types";
 
 /** 与 app.go 导出的绑定方法一一对应（改 Go 签名必须同步这里） */
 interface AppBindings {
@@ -24,6 +25,8 @@ interface AppBindings {
   CancelScan(): Promise<void>;
   GetVideoServerPort(): Promise<number>;
   PlayVideo(relativePath: string): Promise<void>;
+  GetScanProgress(): Promise<ScanProgress>;
+  GetLastFolder(): Promise<string>;
   StartShareServer(folderPath: string, port: number): Promise<ShareServerInfo>;
   StopShareServer(): Promise<void>;
   GetShareStatus(): Promise<ShareStatus>;
@@ -33,11 +36,35 @@ interface AppBindings {
   GenerateRandomPassword(): Promise<string>;
   ResetPassword(): Promise<void>;
   PickFolder(): Promise<string>;
+  ResolveDroppedFolder(paths: string[]): Promise<string>;
   OpenURL(url: string): Promise<void>;
 }
 
 interface WailsGlobal {
   go?: { main?: { App?: AppBindings } };
+}
+
+/**
+ * Wails 注入的运行时（只声明本文件用到的那一个方法）
+ *
+ * 这不是 `wailsjs/` 生成物：它与 `window.go` 一样是 Wails 在页面里注入的全局，
+ * 因此不需要 wails CLI 参与 `pnpm check`。
+ */
+interface WailsRuntime {
+  /**
+   * 注册系统级文件拖放回调
+   *
+   * **必须由前端调用**：Go 侧的 `runtime.OnFileDrop` 只是订阅 `wails:file-drop`
+   * 事件，真正把 WebView2 解析出的绝对路径发出来的，是 JS 侧在调用本方法后
+   * 才挂上的 dragover/drop 监听器。少这一句，拖放会"看着接了、永远收不到"。
+   *
+   * `useDropTarget` 传 false：那套机制靠元素上的 CSS 自定义属性标记投放区，
+   * 而窗口里任意位置都该能接住文件夹，高亮由页面自己的遮罩负责。
+   */
+  OnFileDrop(
+    callback: (x: number, y: number, paths: string[] | null) => void,
+    useDropTarget?: boolean,
+  ): void;
 }
 
 function bindings(): AppBindings {
@@ -46,6 +73,11 @@ function bindings(): AppBindings {
     throw new Error("Wails 绑定不可用（应只在桌面端调用）");
   }
   return app;
+}
+
+function wailsRuntime(): WailsRuntime | null {
+  const rt = (window as unknown as { runtime?: WailsRuntime }).runtime;
+  return rt && typeof rt.OnFileDrop === "function" ? rt : null;
 }
 
 /** Go `VideoFile` → 应用内统一视频条目（snake_case → camelCase） */
@@ -67,12 +99,50 @@ function toVideoItem(video: VideoFile): VideoItem {
 let videoServerPort: number | null = null;
 let initPromise: Promise<void> | null = null;
 
+/**
+ * 拖放订阅者（同一时刻只有一个：根组件）
+ *
+ * `OnFileDrop` 在 Wails 的 JS 运行时里带 `registered` 标志，第二次调用直接
+ * return，所以注册只做一次并常驻；事件按"当前订阅者"转发，避免把回调绑死在
+ * 某个组件实例上。
+ */
+let dropHandlers: FolderDropHandlers | null = null;
+let dropRegistered = false;
+
+function ensureDropRegistration(): void {
+  if (dropRegistered) return;
+  const rt = wailsRuntime();
+  if (!rt) {
+    // 桌面端拿不到 runtime 说明页面被当成普通网页打开过：拖放整个不存在，
+    // 安静降级即可（canDropFolder 仍为 true，但拖进来不会发生任何事）
+    console.warn("Wails 运行时不可用，拖放功能将不可用");
+    return;
+  }
+  rt.OnFileDrop((_x, _y, paths) => {
+    const handlers = dropHandlers;
+    if (!handlers) return;
+    // 类型过滤放在 Go 侧：JS 的 File 对象不带 isDirectory
+    void bindings()
+      .ResolveDroppedFolder(paths ?? [])
+      .then((folder) => {
+        if (folder) handlers.onFolder(folder);
+        else handlers.onRejected();
+      })
+      .catch((e) => {
+        console.error("解析拖入的路径失败:", e);
+        handlers.onRejected();
+      });
+  }, false);
+  dropRegistered = true;
+}
+
 export const desktop: Platform = {
   kind: "desktop",
   canPickFolder: true,
   canShare: true,
   canCancelScan: true,
   canOpenWithSystemPlayer: true,
+  canDropFolder: true,
   listPollIntervalMs: null,
   scanRunsLocally: true,
 
@@ -100,11 +170,46 @@ export const desktop: Platform = {
     return selected ? selected : null;
   },
 
-  async rescan(folder) {
-    const report = await bindings().ScanVideos(folder);
-    // 扫描结果已写入后端状态，再取一次保证与后端一致（含排序生效后的顺序）
-    const videos = (await bindings().GetSharedVideos()) ?? [];
-    return { videos: videos.map(toVideoItem), report };
+  async getLastFolder() {
+    const folder = await bindings().GetLastFolder();
+    return folder ? folder : null;
+  },
+
+  onFolderDrop(handlers) {
+    dropHandlers = handlers;
+    ensureDropRegistration();
+    return () => {
+      // 根组件不会卸载；这里只防"将来有人中途换订阅者后还收到旧回调"
+      if (dropHandlers === handlers) dropHandlers = null;
+    };
+  },
+
+  async rescan(folder, onProgress) {
+    // 轮询而不是事件推送：扫描跑在 Go 的一个 goroutine 里（绑定调用本身可并发），
+    // 250ms 一次的开销与一次重绘同量级；事件通道要额外维护订阅/退订，还要处理
+    // "扫描已结束、事件仍在路上"的竞态，不值得。
+    //
+    // 先落到 const 上：可选参数在闭包里会丢掉类型收窄，直接调 onProgress 编译不过。
+    const notify = onProgress;
+    const timer =
+      notify === undefined
+        ? null
+        : setInterval(() => {
+            void bindings()
+              .GetScanProgress()
+              .then((p) => notify(p))
+              .catch(() => {
+                // 进度是锦上添花：取不到就只保留转圈，不要让它影响扫描结果
+              });
+          }, 250);
+    try {
+      const report = await bindings().ScanVideos(folder);
+      // 扫描结果已写入后端状态，再取一次保证与后端一致（含排序生效后的顺序）
+      const videos = (await bindings().GetSharedVideos()) ?? [];
+      return { videos: videos.map(toVideoItem), report };
+    } finally {
+      if (timer !== null) clearInterval(timer);
+    }
   },
 
   async loadVideos() {

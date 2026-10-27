@@ -35,10 +35,24 @@ var errScanCancelled = errors.New("scan cancelled")
 type Result struct {
 	Videos []models.VideoFile
 	Report models.ScanReport
+	// Visited 是遍历过程中检查过的**文件**条目数（目录不计，符号链接等特殊
+	// 条目计入——它们确实被看过）。仅用于进度与终态展示，不参与任何判断。
+	Visited int64
 }
 
-// Scan 遍历 folder 并返回视频列表与报告。cancel 非空时每个条目前检查取消标志。
-func Scan(folder string, cancel *atomic.Bool) (*Result, error) {
+// 进度回调的节流参数。
+//
+// 两个条件是**或**的关系，不是"与"：快盘上的大目录靠条目数保持均匀
+// （每 200 条一次，典型机械盘约几十毫秒）；慢盘 / 网络共享上 200 条可能要
+// 好几秒，此时由时间兜底，否则进度条会在最需要它的场景里纹丝不动。
+const (
+	progressEveryEntries = 200
+	progressInterval     = 100 * time.Millisecond
+)
+
+// Scan 遍历 folder 并返回视频列表与报告。cancel 非空时每个条目前检查取消标志；
+// onProgress 非空时按上述节流规则回调（visited 只增不减，found 是当前已收录数）。
+func Scan(folder string, cancel *atomic.Bool, onProgress func(visited, found int64)) (*Result, error) {
 	info, err := os.Stat(folder)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -59,6 +73,13 @@ func Scan(folder string, cancel *atomic.Bool) (*Result, error) {
 	}}
 
 	// visit 是遍历回调。抽成闭包是为了能对多个起点调用（见下方 walkRoots）。
+	//
+	// visited / lastEmit 在 walkRoots 的循环**外**声明：多个起点要累加到同一个
+	// 计数上，否则重解析点根目录会从 0 重新开始数。
+	var (
+		visited  int64
+		lastEmit time.Time
+	)
 	visit := func(path string, d fs.DirEntry, walkErr error) error {
 		if cancel != nil && cancel.Load() {
 			return errScanCancelled
@@ -66,8 +87,16 @@ func Scan(folder string, cancel *atomic.Bool) (*Result, error) {
 		if walkErr != nil {
 			return nil // 单个条目不可读（权限/竞态删除）直接跳过，不中断整体扫描
 		}
-		if d.IsDir() || !d.Type().IsRegular() {
-			return nil // 目录与符号链接等特殊条目一律忽略
+		if d.IsDir() {
+			return nil // 目录不计入进度：用户理解的是"扫了多少个文件"
+		}
+		visited++
+		if onProgress != nil && (visited%progressEveryEntries == 0 || time.Since(lastEmit) >= progressInterval) {
+			lastEmit = time.Now()
+			onProgress(visited, int64(len(res.Videos)))
+		}
+		if !d.Type().IsRegular() {
+			return nil // 符号链接等特殊条目一律忽略（但已计入"检查过"）
 		}
 		ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(d.Name()), "."))
 		if !constants.IsSupportedVideoExtension(ext) {
@@ -128,6 +157,7 @@ func Scan(folder string, cancel *atomic.Bool) (*Result, error) {
 
 	sortByNameLower(res.Videos)
 	res.Report.Total = len(res.Videos)
+	res.Visited = visited
 	return res, nil
 }
 
@@ -175,6 +205,10 @@ func sortByNameLower(videos []models.VideoFile) {
 // ScanAndStore 是所有扫描入口的统一通路：ScanGuard 互斥（桌面扫描与网页
 // /refresh 共用，并发时返回"扫描正在进行中"）→ 扫描 → 原子替换列表。
 // 成功时返回报告；取消/失败时不改动现有列表。
+//
+// 扫描进度也在这里发布：入口唯一，才不会有"某条路径忘了报进度"的进度条卡死。
+// 开始时先落一条 scanning=true，期间由 Scan 节流回调，结束时（**含失败与取消**）
+// 落终态 scanning=false。
 func ScanAndStore(st *state.AppState, folder string, cancel *atomic.Bool) (*models.ScanReport, error) {
 	if !st.BeginScan() {
 		return nil, apperr.Other("扫描正在进行中，请稍后")
@@ -182,10 +216,32 @@ func ScanAndStore(st *state.AppState, folder string, cancel *atomic.Bool) (*mode
 	defer st.EndScan()
 
 	st.ResetCancelScan()
-	res, err := Scan(folder, cancel)
+
+	// prog 只在**本 goroutine** 内读写（Scan 的回调与 defer 都在同一线程上跑），
+	// 不需要额外同步；SetScanProgress 内部取一份副本发布出去。
+	prog := models.ScanProgress{Scanning: true}
+	st.SetScanProgress(prog)
+	// 注册顺序决定执行顺序（LIFO）：这条 defer 后注册，因此先于 EndScan 执行。
+	// 必须如此——否则会出现"ScanGuard 已释放、进度仍是 scanning=true"的窗口，
+	// 前端在紧接着开始的第二次扫描里会读到上一轮的终态计数。
+	defer func() {
+		prog.Scanning = false
+		st.SetScanProgress(prog)
+	}()
+
+	res, err := Scan(folder, cancel, func(visited, found int64) {
+		prog.Visited, prog.Found = visited, found
+		st.SetScanProgress(prog)
+	})
 	if err != nil {
+		// 失败/取消：终态计数停在最后一次回调上，可能比实际少最多
+		// progressEveryEntries 条——此时用户已经看到"已取消"，不需要精确值。
 		return nil, err
 	}
+	// 小目录（不足 progressEveryEntries 条、且扫得比 progressInterval 快）
+	// 一次回调都不会触发，终态必须在这里补齐，否则前端会看到
+	// "扫描完成、0 项、0 个视频"这种自相矛盾的收尾。
+	prog.Visited, prog.Found = res.Visited, int64(len(res.Videos))
 	// 列表与目录必须一次发布：分两次写会留下窗口，让 /video/* 用新列表的
 	// relative_path 去解析旧根目录而得到伪 404
 	st.SetScanResult(res.Videos, folder)

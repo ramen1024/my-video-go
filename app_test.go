@@ -75,6 +75,35 @@ func TestIsAllowedExternalURL(t *testing.T) {
 	}
 }
 
+// 拖入路径的类型过滤必须在 Go 侧完成（JS 的 File 对象不带 isDirectory），
+// 而且只能挑出**文件夹**。
+//
+// 只收文件夹是刻意的：拖入单个视频时替用户扫它所在的目录，等于把"打开这部
+// 片子"变成"扫描整个桌面"——上万条目、几十秒读盘，用户完全预期不到。
+func TestResolveDroppedFolder(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "a.mp4")
+	if err := os.WriteFile(file, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	app := &App{}
+
+	// 文件在前、目录在后：一次拖入多个条目时顺序不可控，必须跳过文件继续找
+	if got := app.ResolveDroppedFolder([]string{file, dir}); got != dir {
+		t.Fatalf("应挑出目录 %q，实际 %q", dir, got)
+	}
+	if got := app.ResolveDroppedFolder([]string{file}); got != "" {
+		t.Fatalf("只有文件时应返回空串（前端据此提示\"请拖动文件夹\"），实际 %q", got)
+	}
+	if got := app.ResolveDroppedFolder(nil); got != "" {
+		t.Fatalf("nil 输入应返回空串，实际 %q", got)
+	}
+	if got := app.ResolveDroppedFolder([]string{filepath.Join(dir, "nope")}); got != "" {
+		t.Fatalf("不存在的路径应跳过，实际 %q", got)
+	}
+}
+
 // PlayVideo 交给 ShellExecute 之前必须确认目标是**普通文件**。
 //
 // 扩展名白名单只看名字：ResolveVideoPath 会跟随符号链接，于是

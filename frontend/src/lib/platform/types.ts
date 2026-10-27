@@ -11,6 +11,7 @@
 
 import type {
   PasswordStatus,
+  ScanProgress,
   ScanReport,
   ShareServerInfo,
   ShareStatus,
@@ -28,6 +29,19 @@ export interface VideoItem {
   modified: string | null;
   /** 文件扩展名（小写） */
   extension: string;
+}
+
+/**
+ * 拖入文件夹时的回调（仅桌面端）
+ *
+ * 两侧分开而不是"一个带 ok 标志的回调"：这两种结果的 UI 完全不同——
+ * 前者切换当前目录并开始扫描，后者只是一句提示。
+ */
+export interface FolderDropHandlers {
+  /** 拖入的是一个文件夹（绝对路径） */
+  onFolder(folder: string): void;
+  /** 拖入的路径里没有文件夹（单个视频文件、快捷方式等） */
+  onRejected(): void;
 }
 
 /** 运行环境标识 */
@@ -83,8 +97,32 @@ export interface Platform {
    */
   readonly scanRunsLocally: boolean;
 
+  /**
+   * 是否支持把文件夹拖进窗口来扫描
+   *
+   * 仅桌面端为 `true`。浏览器出于安全**拿不到拖入项的真实路径**（`File` 只有
+   * 文件名），而扫描需要一个绝对路径，所以网页端不提供任何拖放入口。
+   */
+  readonly canDropFolder: boolean;
+
   /** 选择本机文件夹；不支持或用户取消时返回 `null` */
   pickFolder(): Promise<string | null>;
+
+  /**
+   * 上次成功扫描的文件夹（桌面端；网页端恒为 `null`）
+   *
+   * 启动时据此自动恢复列表。返回的是**记录值**而非校验过的路径：目录可能已被
+   * 删除、或所在磁盘未挂载，此时扫描会失败，由调用方决定怎么提示。
+   */
+  getLastFolder(): Promise<string | null>;
+
+  /**
+   * 订阅"拖入文件夹"事件，返回取消订阅函数（仅桌面端）
+   *
+   * 只回调**文件夹**：拖入单个文件时派发的是 `onRejected`，因为"扫这个文件所在
+   * 的目录"在桌面场景下等于扫描整个桌面（见 Go 侧 `ResolveDroppedFolder`）。
+   */
+  onFolderDrop(handlers: FolderDropHandlers): () => void;
 
   /**
    * 平台初始化（幂等），App 挂载时最先调用
@@ -100,8 +138,15 @@ export interface Platform {
    * 返回最新列表与本次扫描报告。报告用于解释"目录里明明有 N 个文件、列表里只有
    * M 个"——例如过小的文件会被跳过，此前这类丢弃完全是静默的。
    * 网页端拿不到逐文件明细时，至少给出被跳过的**数量**。
+   *
+   * `onProgress` 在扫描期间被反复调用（桌面端约 250ms 一次、网页端随轮询）；
+   * 计数只增不减，最后一条不保证是终态（扫描结束时调用方才拿到返回值）。
+   * 一次耗时几十秒的扫描里，界面上唯一能证明"它还活着"的就是这个回调。
    */
-  rescan(folder: string): Promise<{ videos: VideoItem[]; report: ScanReport }>;
+  rescan(
+    folder: string,
+    onProgress?: (progress: ScanProgress) => void,
+  ): Promise<{ videos: VideoItem[]; report: ScanReport }>;
 
   /**
    * 读取当前视频列表（不触发扫描）

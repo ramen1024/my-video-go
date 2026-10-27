@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"fmt"
 	"my-video-go/internal/models"
 	"my-video-go/internal/state"
 	"os"
@@ -35,7 +36,7 @@ func TestScanFiltersByExtensionAndSize(t *testing.T) {
 	makeFile(t, filepath.Join(dir, "Movie.MP4"), 2*mib)   // 大写扩展名 → 收录且小写化
 	makeFile(t, filepath.Join(dir, "clip.mkv"), 1500*kib) // 正常收录
 
-	res, err := Scan(dir, nil)
+	res, err := Scan(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("Scan 失败: %v", err)
 	}
@@ -66,7 +67,7 @@ func TestScanRecursesSubdirectories(t *testing.T) {
 	os.MkdirAll(sub, 0o755)
 	makeFile(t, filepath.Join(sub, "nested.webm"), 3*mib)
 
-	res, err := Scan(dir, nil)
+	res, err := Scan(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("Scan 失败: %v", err)
 	}
@@ -89,7 +90,7 @@ func TestScanIgnoresSymlinks(t *testing.T) {
 		t.Skipf("当前环境无法创建符号链接: %v", err)
 	}
 
-	res, err := Scan(dir, nil)
+	res, err := Scan(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("Scan 失败: %v", err)
 	}
@@ -107,7 +108,7 @@ func TestScanRejectsRootDirectory(t *testing.T) {
 	if !isRootDirectory(`C:\`) {
 		t.Fatal("C:\\ 应被判定为磁盘根目录")
 	}
-	_, err := Scan(`C:\`, nil)
+	_, err := Scan(`C:\`, nil, nil)
 	// 断言 Error() 文本而非错误类型：前端与用户能看到的只有这句话
 	if err == nil || !strings.Contains(err.Error(), "根目录") {
 		t.Fatalf("扫描根目录应返回根目录警告: %v", err)
@@ -153,7 +154,7 @@ func TestScanCancelled(t *testing.T) {
 
 	var cancel atomic.Bool
 	cancel.Store(true)
-	_, err := Scan(dir, &cancel)
+	_, err := Scan(dir, &cancel, nil)
 	if err == nil || err.Error() != "扫描已取消" {
 		t.Fatalf("应返回扫描已取消: %v", err)
 	}
@@ -207,7 +208,7 @@ func TestScanReportTruncation(t *testing.T) {
 	for i := 0; i < 25; i++ {
 		makeFile(t, filepath.Join(dir, strings.Repeat("x", i+1)+".mp4"), 100)
 	}
-	res, err := Scan(dir, nil)
+	res, err := Scan(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("Scan 失败: %v", err)
 	}
@@ -227,7 +228,7 @@ func TestScanSortsCaseInsensitiveByName(t *testing.T) {
 	makeFile(t, filepath.Join(dir, "Beta.mp4"), 2*mib)
 	makeFile(t, filepath.Join(dir, "alpha.mp4"), 2*mib)
 
-	res, err := Scan(dir, nil)
+	res, err := Scan(dir, nil, nil)
 	if err != nil {
 		t.Fatalf("Scan 失败: %v", err)
 	}
@@ -264,14 +265,80 @@ func TestScanAndStoreGuardAndState(t *testing.T) {
 	}
 }
 
+// 进度回调必须**单调不减**，且最终 Visited 覆盖全部文件条目。
+//
+// 这条锁的是"界面上的数字只会往前走"：一旦有人把 visited 改成按目录重置
+// （例如在 walkRoots 循环里重新声明），用户会看到计数跳回去。
+func TestScanReportsProgress(t *testing.T) {
+	dir := t.TempDir()
+	const total = progressEveryEntries*2 + 10
+	for i := 0; i < total; i++ {
+		makeFile(t, filepath.Join(dir, fmt.Sprintf("v%03d.mp4", i)), 2*mib)
+	}
+
+	var calls int
+	var lastVisited, lastFound int64
+	res, err := Scan(dir, nil, func(visited, found int64) {
+		calls++
+		if visited < lastVisited {
+			t.Fatalf("visited 回退: %d → %d", lastVisited, visited)
+		}
+		if found < lastFound {
+			t.Fatalf("found 回退: %d → %d", lastFound, found)
+		}
+		if found > int64(total) {
+			t.Fatalf("found(%d) 超过文件总数(%d)", found, total)
+		}
+		lastVisited, lastFound = visited, found
+	})
+	if err != nil {
+		t.Fatalf("Scan 失败: %v", err)
+	}
+	if calls < 2 {
+		t.Fatalf("回调只触发 %d 次，至少应为 2 次（每 %d 条一次）", calls, progressEveryEntries)
+	}
+	if res.Visited != total {
+		t.Fatalf("Visited = %d, 期望 %d", res.Visited, total)
+	}
+}
+
+// 终态进度必须由 Scan 的返回值补齐，而不是只依赖节流回调。
+//
+// 小目录（不足 progressEveryEntries 条、且扫得比 progressInterval 快）一次
+// 回调都不会触发——若终态只来自回调，前端会看到"扫描完成、0 项、0 个视频"。
+func TestScanAndStorePublishesFinalProgress(t *testing.T) {
+	dir := t.TempDir()
+	makeFile(t, filepath.Join(dir, "a.mp4"), 2*mib)
+	makeFile(t, filepath.Join(dir, "b.txt"), 2*mib) // 非视频也算"检查过"
+
+	st := state.New()
+	if p := st.ScanProgress(); p.Scanning || p.Visited != 0 || p.Found != 0 {
+		t.Fatalf("初始进度应为零值: %+v", p)
+	}
+
+	if _, err := ScanAndStore(st, dir, nil); err != nil {
+		t.Fatalf("ScanAndStore 失败: %v", err)
+	}
+	p := st.ScanProgress()
+	if p.Scanning {
+		t.Fatal("扫描结束后 scanning 必须为 false（否则前端永远停在转圈）")
+	}
+	if p.Visited != 2 {
+		t.Fatalf("Visited = %d, 期望 2（a.mp4 + b.txt）", p.Visited)
+	}
+	if p.Found != 1 {
+		t.Fatalf("Found = %d, 期望 1", p.Found)
+	}
+}
+
 func TestScanMissingAndNotDir(t *testing.T) {
-	_, err := Scan(filepath.Join(t.TempDir(), "不存在"), nil)
+	_, err := Scan(filepath.Join(t.TempDir(), "不存在"), nil, nil)
 	if err == nil || err.Error() != "文件夹不存在" {
 		t.Fatalf("期望\"文件夹不存在\": %v", err)
 	}
 	file := filepath.Join(t.TempDir(), "f.txt")
 	os.WriteFile(file, []byte("x"), 0o644)
-	_, err = Scan(file, nil)
+	_, err = Scan(file, nil, nil)
 	if err == nil || err.Error() != "路径不是文件夹" {
 		t.Fatalf("期望\"路径不是文件夹\": %v", err)
 	}
@@ -312,7 +379,7 @@ func TestScanJunctionRootExpands(t *testing.T) {
 		t.Fatalf("前置条件：junction 应被 os.Stat 认作目录")
 	}
 
-	res, err := Scan(link, nil)
+	res, err := Scan(link, nil, nil)
 	if err != nil {
 		t.Fatalf("Scan(junction) 不应报错: %v", err)
 	}
@@ -342,7 +409,7 @@ func TestScanJunctionRootRelativePathsAreUsable(t *testing.T) {
 	link := filepath.Join(parent, "Videos")
 	makeJunction(t, link, realDir)
 
-	res, err := Scan(link, nil)
+	res, err := Scan(link, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
