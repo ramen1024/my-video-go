@@ -2,6 +2,7 @@ package localips
 
 import (
 	"net"
+	"slices"
 	"testing"
 )
 
@@ -156,5 +157,75 @@ func TestGetReturnsCopy(t *testing.T) {
 	mu.Unlock()
 	if cachedFirst != original {
 		t.Fatalf("包内缓存被调用方改写：%q，期望 %q", cachedFirst, original)
+	}
+}
+
+// 默认路由地址必须能移到首位——前端按 ips[0] 生成二维码，
+// 而这台机器上热点的 192.168.137.1 恰好排在真实 WLAN 前面。
+func TestMoveToFront(t *testing.T) {
+	cases := []struct {
+		name      string
+		ips       []string
+		preferred string
+		want      []string
+	}{
+		{
+			name:      "从中间移到首位",
+			ips:       []string{"192.168.137.1", "192.168.74.1", "192.168.31.38"},
+			preferred: "192.168.31.38",
+			want:      []string{"192.168.31.38", "192.168.137.1", "192.168.74.1"},
+		},
+		{
+			name:      "已在首位时顺序不变",
+			ips:       []string{"192.168.31.38", "192.168.137.1"},
+			preferred: "192.168.31.38",
+			want:      []string{"192.168.31.38", "192.168.137.1"},
+		},
+		{
+			name:      "不在列表里时原样返回",
+			ips:       []string{"192.168.137.1", "172.21.32.1"},
+			preferred: "192.168.31.38",
+			want:      []string{"192.168.137.1", "172.21.32.1"},
+		},
+		{
+			name:      "无默认路由（空串）",
+			ips:       []string{"192.168.137.1"},
+			preferred: "",
+			want:      []string{"192.168.137.1"},
+		},
+		{
+			name:      "单元素",
+			ips:       []string{"10.0.0.5"},
+			preferred: "10.0.0.5",
+			want:      []string{"10.0.0.5"},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			orig := slices.Clone(c.ips)
+			got := moveToFront(c.ips, c.preferred)
+			if !slices.Equal(got, c.want) {
+				t.Fatalf("moveToFront(%v, %q) = %v, want %v", c.ips, c.preferred, got, c.want)
+			}
+			// 不得就地修改：这份切片可能来自共享缓存，
+			// 改动会波及 Get() 返回给其他调用方的副本
+			if !slices.Equal(c.ips, orig) {
+				t.Fatalf("moveToFront 修改了入参：%v，期望保持 %v", c.ips, orig)
+			}
+		})
+	}
+}
+
+// defaultRouteSource 依赖真实路由表，只断言**格式**，不锚定具体地址——
+// CI 与开发机的网络环境不同，锚定地址会变成一条随环境红的测试。
+func TestDefaultRouteSourceIsValidIPv4WhenAvailable(t *testing.T) {
+	ip := defaultRouteSource()
+	if ip == "" {
+		t.Skip("当前环境没有默认路由（可能无网络），跳过")
+	}
+	parsed := net.ParseIP(ip)
+	if parsed == nil || parsed.To4() == nil {
+		t.Fatalf("defaultRouteSource() = %q，不是合法 IPv4", ip)
 	}
 }

@@ -22,7 +22,9 @@
     // 于是 shareInfo.ips 被替换（重新共享后网卡地址变了）而旧 IP 已消失时，
     // 二维码与跳转链接会一直指向一个不可达的地址。
     if (!shareInfo.ips.includes(selectedIp)) {
-      // 默认选择第一个 IP（主网卡地址，通常是局域网访问地址）
+      // 默认取第一个：后端（internal/localips）已把**默认路由的源地址**
+      // 排到首位，其余地址（VMware / WSL / 移动热点）排在后面备选。
+      // 不能指望接口枚举顺序——Windows 上热点常排在真实 WLAN 前面。
       selectedIp = shareInfo.ips[0] ?? "";
     }
   });
