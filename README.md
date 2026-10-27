@@ -17,9 +17,9 @@
 |:---:|:---:|
 | ![网页端播放《Big Buck Bunny》：应用内直接播放，可拖动进度条](docs/screenshot-player.jpg) | ![登录页：4 位数字键盘](docs/screenshot-login.png) |
 
-> 截图中的四个视频都是 **Blender 开放电影计划**等渠道的 CC 授权短片
-> （Big Buck Bunny、Sintel、Jellyfish、Flower），共享地址为示例值，
-> 与真实网络环境无关。
+> 截图中的视频为公开示例素材：Flower 与 Sintel 来自 MDN 的 CC 授权示例
+> （Sintel 为 Blender 开放电影），Forest 空镜为 samplelib.com 的演示片段。
+> 共享地址为示例值，与真实网络环境无关。
 
 ## 下载
 
