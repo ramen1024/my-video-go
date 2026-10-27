@@ -253,6 +253,13 @@ export const web: Platform = {
     return `/video/${encodeURIComponent(video.relativePath)}`;
   },
 
+  thumbnailSource(video) {
+    // 页面与 /video/* 同源，canvas 不会被 taint，无需 CORS 模式。
+    // 跨源模式在这里反而多余：它会额外要求服务端回 ACAO，而共享服务器的
+    // 鉴权/CSRF 链路上没有这一项，设了只会让缩略图整体失败。
+    return { src: `/video/${encodeURIComponent(video.relativePath)}`, crossOrigin: false };
+  },
+
   async openWithSystemPlayer() {
     // 网页端没有"系统播放器"概念；preferInlinePlayback 恒为 true，此分支不会被触及
     throw new Error("网页端不支持调用系统播放器");

@@ -32,6 +32,22 @@ export interface VideoItem {
 }
 
 /**
+ * 缩略图源
+ *
+ * `crossOrigin` 描述的是"这个地址与当前页面是否同源"：桌面端页面在
+ * `http://wails.localhost`、视频在 `http://127.0.0.1:<随机端口>`（见
+ * internal/player 的包注释），必须让 `<video>` 以 CORS 模式加载，否则 canvas
+ * 会被 taint、`toDataURL` 抛 SecurityError；网页端两者同源，不需要。
+ *
+ * 能否跨源读出像素取决于服务端是否回 `Access-Control-Allow-Origin`：
+ * 桌面端由 internal/player/cors.go 按白名单回显，网页端同源天然满足。
+ */
+export interface ThumbnailSource {
+  src: string;
+  crossOrigin: boolean;
+}
+
+/**
  * 拖入文件夹时的回调（仅桌面端）
  *
  * 两侧分开而不是"一个带 ok 标志的回调"：这两种结果的 UI 完全不同——
@@ -180,6 +196,16 @@ export interface Platform {
    * 同一套路径校验与 Range 实现（`share.VideoHandler`）。
    */
   videoSrc(video: VideoItem): string;
+
+  /**
+   * 缩略图源；`null` 表示当前环境拿不到（如桌面端回环服务器未就绪）
+   *
+   * 与 `videoSrc` 分开是因为两者的**加载方式**不同：播放用 `<video>` 直接
+   * 打开即可（媒体元素不受 CORS 约束），而缩略图要把画面画进 canvas 读像素，
+   * 跨源时必须显式走 CORS 模式。这个差异属于平台实现细节，不该让组件判断
+   * "我现在是不是桌面端"。
+   */
+  thumbnailSource(video: VideoItem): ThumbnailSource | null;
 
   /**
    * 用系统默认播放器打开（桌面端专用）

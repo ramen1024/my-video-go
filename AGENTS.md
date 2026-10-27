@@ -82,6 +82,23 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
 `canOpenWithSystemPlayer` / `listPollIntervalMs`），不得直接调 `Call.ByName`
 或判断运行环境。
 
+`Platform.thumbnailSource` 是唯一需要"跨源"知识的平台差异：列表缩略图要把
+`<video>` 画进 canvas 读像素，而桌面端页面在 `http://wails.localhost`、视频在
+`http://127.0.0.1:<随机端口>`（见 `internal/player` 包注释），必须以 CORS 模式
+加载；网页端同源。组件拿到的统一是 `{ src, crossOrigin }`，不判断自己跑在哪一侧。
+
+`frontend/src/lib/utils/thumbnail.ts` 的几条硬约束（改之前先读注释）：
+
+- **并发固定 2 路**：每个缩略图都要真实解码一帧，十几路并发会卡主线程、
+  在局域网里同时拉十几条流；
+- **引用计数取消**（`retainThumbnail` / `releaseThumbnail`）：虚拟列表快速滚动
+  会瞬间创建几十个任务，出队时发现组件已卸载就丢弃——否则用户滚到底部后，
+  CPU 还要空转几分钟；
+- **缓存键带 size + modified**：同名文件被替换后旧图自然失效，不需要显式清理；
+- **8 秒超时 + 失败缓存**：坏文件只试一次，不堵住队列；
+- 只对 `preferInlinePlayback(video)` 为 true 的条目请求：avi/wmv/flv 在 webview
+  里解不了，拉一次数据只会白等超时（网页端该函数恒为 true，由浏览器自己试）。
+
 ## Backend (`internal/`)
 
 - `apperr/` — 面向前端的应用错误（只有 `Error()` 返回中文 message，**没有类型字段**）。
@@ -152,7 +169,13 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   `TestCSRFAllowsSameOriginRequests` 锁定"不误伤同源"——两条缺一不可：
   只测后者的话，整个中间件被删掉测试照样绿
 - `player/` — 桌面端内联播放专用的**回环 HTTP 服务器**（127.0.0.1 随机端口，
-  只路由 `/video/` 到 `share.VideoHandler`）
+  只路由 `/video/` 到 `share.VideoHandler`）。`cors.go` **只对
+  `http://wails.localhost[:端口]` 回显** `Access-Control-Allow-Origin`：列表缩略图
+  要在 canvas 里读像素，而页面与视频不同源，不带头时 `toDataURL` 抛 SecurityError。
+  **不要改成 `*`**——那等于让本机浏览器里的任意网页都能 fetch 读取视频字节；
+  `isDesktopOrigin` 也必须校验前缀之后是 `:` 或结尾，否则
+  `wails.localhost.evil.com` 会命中白名单（`TestIsDesktopOrigin` 锁定）。
+  网页端共享服务器**不挂**这个中间件：它服务同源的 `/video/*`，开跨源读取没有收益
 - `state/` — AppState：atomic.Pointer 快照（**列表+ETag+共享目录三元组**、共享信息、
   刷新结果、**扫描进度**）、服务器状态机（Stopped→Starting→Running→Stopping）、
   扫描/刷新 CAS 守卫。`ScanProgress` 的零值就是"没扫过/扫完了"（`scanning=false`），

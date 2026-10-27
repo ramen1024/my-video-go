@@ -8,15 +8,22 @@
   import { onDestroy, onMount } from "svelte";
   import { get } from "svelte/store";
   import { createVirtualizer } from "@tanstack/svelte-virtual";
-  import type { VideoItem } from "$lib/platform";
+  import type { ThumbnailSource, VideoItem } from "$lib/platform";
   import type { SortField, SortDirection } from "$lib/types";
   import { formatFileSize, formatDateOnly } from "$lib/utils/format";
+  import VideoThumbnail from "$lib/components/VideoThumbnail.svelte";
 
   interface Props {
     videos: VideoItem[];
     onPlay: (video: VideoItem) => void;
     /** 该条目是否应优先用内置播放器（否则按钮语义为"用系统播放器打开"） */
     preferInlinePlayback: (video: VideoItem) => boolean;
+    /**
+     * 缩略图源（由平台适配层给出；`null` 表示当前环境拿不到）
+     *
+     * 组件只负责把它转交给 VideoThumbnail，不关心跨源与否。
+     */
+    thumbnailSource: (video: VideoItem) => ThumbnailSource | null;
     /**
      * 当前扫描目录的**绝对路径**（仅桌面端有值）
      *
@@ -27,7 +34,13 @@
     folderPath?: string;
   }
 
-  let { videos, onPlay, preferInlinePlayback, folderPath = "" }: Props = $props();
+  let {
+    videos,
+    onPlay,
+    preferInlinePlayback,
+    thumbnailSource,
+    folderPath = "",
+  }: Props = $props();
 
   let sortField = $state<SortField>("name");
   let sortDirection = $state<SortDirection>("asc");
@@ -89,16 +102,29 @@
   /**
    * 行高
    *
-   * 桌面端是单行（48px，与 13px 正文相称）；窄屏是两行卡片
-   * （文件名最多两行 + "大小 · 日期"一行），48px 装不下会上下叠住。
+   * 桌面端 60px：64×36 的缩略图（16:9）加上下各 12px 内衬。此前是 48px，
+   * 只够放一行文字；缩略图要能看出画面，36px 高是下限。
    *
-   * 窄屏给到 84px 是为了**两行文件名**：触屏没有 hover，`title` 基本不出现，
-   * 一旦截成一行，长名字就再没有第二次机会看到全文（曾经只能靠悬停）。
-   * 行高必须与下面的 CSS 完全一致——虚拟列表按这个值算每行的位置与总高度，
+   * 窄屏 96px：缩略图 56×32 在左跨两行，右侧是"文件名（最多两行）"
+   * 与"大小 · 日期 + 按钮"。84px 装不下两行名字加缩略图。
+   *
+   * 行高必须与下面 CSS 的布局完全一致——虚拟列表按这个值算每行的位置与总高度，
    * 对不上就会互相叠住或留下空隙。
    */
-  const ROW_HEIGHT_DESKTOP = 48;
-  const ROW_HEIGHT_NARROW = 84;
+  const ROW_HEIGHT_DESKTOP = 60;
+  const ROW_HEIGHT_NARROW = 96;
+
+  /**
+   * 缩略图尺寸
+   *
+   * 与行高、列宽是同一组数字：桌面列宽 96 = 64 + 左右各 16 的内边距；
+   * 窄屏列宽 56、行高留给 32 高的图居中。改任一处都要同时看 CSS 的 --grid-cols
+   * 与那段 @media。
+   */
+  const THUMB_WIDTH_DESKTOP = 64;
+  const THUMB_HEIGHT_DESKTOP = 36;
+  const THUMB_WIDTH_NARROW = 56;
+  const THUMB_HEIGHT_NARROW = 32;
 
   let isNarrow = $state(false);
   let rowHeight = $derived(isNarrow ? ROW_HEIGHT_NARROW : ROW_HEIGHT_DESKTOP);
@@ -277,6 +303,7 @@
   <div class="video-table" role="table" aria-label="视频列表" aria-rowcount={displayVideos.length}>
     <div class="table-header" role="rowgroup">
       <div class="header-row" role="row">
+        <div class="col-thumb" role="columnheader"><span class="sr-only">缩略图</span></div>
         <div class="col-name" role="columnheader" aria-sort={ariaSort("name")}>
           <button class="sort-btn" class:active={sortField === "name"} onclick={() => toggleSort("name")}>
             {sortLabel("name")}
@@ -320,6 +347,20 @@
               焦点在行内时也能触发播放。
             -->
             <div class="table-row" role="row" tabindex="0" style="height: {row.size}px; transform: translateY({row.start}px);" onclick={() => onPlay(video)} onkeydown={(e) => handleRowKeydown(e, video)}>
+              <!--
+                缩略图只在"值得试一次内置解码"时请求：
+                avi/wmv/flv 这类容器 webview 解不了，拉一次数据只会白等 8 秒
+                超时并占住队列，占位块是它们的最终形态，不如直接给。
+                （网页端 preferInlinePlayback 恒为 true，由浏览器自己试。）
+              -->
+              <div class="col-thumb" role="cell">
+                <VideoThumbnail
+                  {video}
+                  source={preferInlinePlayback(video) ? thumbnailSource(video) : null}
+                  width={isNarrow ? THUMB_WIDTH_NARROW : THUMB_WIDTH_DESKTOP}
+                  height={isNarrow ? THUMB_HEIGHT_NARROW : THUMB_HEIGHT_DESKTOP}
+                />
+              </div>
               <!--
                 title：桌面端（folderPath 有值）给完整路径 + 元数据——显示名既已剥掉
                 扩展名、又会被截断，悬停是唯一能看到全文与位置的地方；网页端没有
@@ -473,8 +514,9 @@
      （原来是两个并列的 flex 子项，现在被这个 role="table" 包了一层） */
   .video-table {
     /* 列宽只在这里写一次：表头与行是两处 grid，此前各写一份字面量，
-       改一处就会让列错位 */
-    --grid-cols: minmax(180px, 1fr) 92px 116px 56px;
+       改一处就会让列错位。
+       第一列 96 = 缩略图 64 + 左右各 16 的内边距（见 THUMB_*_DESKTOP）。 */
+    --grid-cols: 96px minmax(180px, 1fr) 92px 116px 56px;
     display: flex;
     flex-direction: column;
     flex: 1;
@@ -576,6 +618,14 @@
     align-items: baseline;
     gap: 6px;
     overflow: hidden;
+  }
+
+  /* 缩略图列：只需要把图在 96px 的格子里居中。
+     padding 沿用 `.table-row > div` 的 0 16px，因此 16 + 64 + 16 = 96，正好。 */
+  .col-thumb {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
   }
 
   .col-size {
@@ -748,26 +798,37 @@
       min-width: 0;
     }
 
-    /* 整行改 flex-wrap：col-name 占满第一行，其余三项落在第二行。
-       不能用 grid —— col-size 与 col-date 会落进同一个单元格互相叠住。
-       高度由 JS 的 ROW_HEIGHT_NARROW 给定，这里的 padding 只做内衬。 */
+    /* 三列 grid：缩略图跨两行，右侧第一行文件名、第二行"大小 · 日期 + 按钮"。
+       不能用 flex-wrap —— 缩略图要跨两行，flex 没有跨行概念。
+       高度由 JS 的 ROW_HEIGHT_NARROW 给定，padding 只做内衬。 */
     .table-row {
-      display: flex;
-      flex-wrap: wrap;
+      display: grid;
+      grid-template-columns: auto auto auto minmax(0, 1fr);
+      grid-template-areas:
+        "thumb name name name"
+        "thumb size date action";
       align-items: center;
       align-content: center;
-      padding: 8px 0;
+      column-gap: 12px;
+      row-gap: 2px;
+      padding: 8px 12px;
     }
 
     .table-row > div {
-      padding: 0 12px;
+      padding: 0;
+      min-width: 0;
+    }
+
+    .col-thumb {
+      grid-area: thumb;
+      align-self: center;
     }
 
     /* 文件名最多两行：触屏没有 hover，title 不作为查看全文的途径，
-       因此把可展示的行数从 1 提到 2（配合 ROW_HEIGHT_NARROW = 84）。
+       因此把可展示的行数从 1 提到 2（配合 ROW_HEIGHT_NARROW）。
        超过两行仍省略——行高是虚拟列表算好的固定值，不能随内容增长。 */
     .col-name {
-      flex: 1 1 100%;
+      grid-area: name;
       min-width: 0;
       /* align-items: baseline 在换行时会按最后一行对齐，
          这里改为顶对齐，两行名字与扩展名徽章的关系才稳定 */
@@ -795,18 +856,18 @@
 
     /* 第二行：大小 → 日期 →（靠右）操作 */
     .col-size {
-      order: 1;
+      grid-area: size;
       text-align: left;
     }
 
     .col-date {
-      order: 2;
+      grid-area: date;
     }
 
     .col-action {
-      order: 3;
-      margin-left: auto;
-      padding-right: 12px;
+      grid-area: action;
+      justify-self: end;
+      text-align: right;
     }
   }
 </style>

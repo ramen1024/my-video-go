@@ -54,8 +54,10 @@ func (s *Server) Start() error {
 
 	mux := http.NewServeMux()
 	mux.Handle("GET /video/", share.VideoHandler{State: s.st})
+	// withCORS 在最外层：缩略图要读像素（canvas 从 <video> 截帧），
+	// 而页面与这里不同源。详见 cors.go 的白名单说明。
 	srv := &http.Server{
-		Handler:           mux,
+		Handler:           withCORS(mux),
 		ReadHeaderTimeout: constants.HTTPReadHeaderTimeout,
 		IdleTimeout:       constants.HTTPIdleTimeout,
 	}

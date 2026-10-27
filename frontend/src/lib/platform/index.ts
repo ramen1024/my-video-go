@@ -36,4 +36,4 @@ export function isWailsWebview(): boolean {
  */
 export const platform: Platform = isWailsWebview() ? desktop : web;
 
-export type { Platform, PlatformKind, VideoItem } from "./types";
+export type { Platform, PlatformKind, ThumbnailSource, VideoItem } from "./types";

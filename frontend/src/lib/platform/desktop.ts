@@ -250,6 +250,14 @@ export const desktop: Platform = {
     await call<void>("PlayVideo", video.relativePath);
   },
 
+  thumbnailSource(video) {
+    const src = desktop.videoSrc(video);
+    if (!src) return null;
+    // 页面在 http://wails.localhost、视频在 http://127.0.0.1:<端口>，必须走
+    // CORS 模式才能读像素。服务端按白名单回显 ACAO，见 internal/player/cors.go。
+    return { src, crossOrigin: true };
+  },
+
   async isPlaybackAuthFailure() {
     // 恒 false：桌面端内联播放走 127.0.0.1 回环服务器，它不做会话鉴权，
     // 共享密码对它不生效（见 internal/player 的威胁模型说明），

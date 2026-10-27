@@ -647,6 +647,7 @@
         {videos}
         onPlay={playVideo}
         preferInlinePlayback={platform.preferInlinePlayback}
+        thumbnailSource={platform.thumbnailSource}
         folderPath={isDesktop ? currentFolder : ""}
       />
     {/if}
