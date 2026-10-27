@@ -98,7 +98,13 @@ jobs:
           $exe = Get-ChildItem "build/bin/*.exe" | Select-Object -First 1
           $dest = "video-scanner-$($env:GITHUB_REF_NAME)-windows-amd64.exe"
           Copy-Item $exe.FullName $dest
+          # SHA256 随产物一起发布：不指望用户去验，但想验的人有据可查。
+          # 内容按 sha256sum 的标准格式写（小写哈希 + 两空格 + 文件名），
+          # `sha256sum -c <文件>` 可直接校验；行尾必须 LF，CRLF 会让 -c 对不上
+          $hash = (Get-FileHash $dest -Algorithm SHA256).Hash.ToLowerInvariant()
+          [System.IO.File]::WriteAllText("$PWD/$dest.sha256", "$hash  $dest`n")
           "ASSET=$dest" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "ASSET_SHA=$dest.sha256" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: 创建 Release
         env:
@@ -107,7 +113,7 @@ jobs:
           gh release create $env:GITHUB_REF_NAME `
             --title "视频扫描器 $env:GITHUB_REF_NAME" `
             --generate-notes `
-            $env:ASSET
+            $env:ASSET $env:ASSET_SHA
 
       # 国内用户下载 exe 需要绕开 GitHub，所以 Gitee 侧也建一份发行版（代码同步由
       # Gitee 原生 Pull 镜像负责，这里只补二进制——镜像不搬 Release，见 AGENTS.md）。
@@ -169,15 +175,20 @@ jobs:
           }
           if (-not $rel.id) { throw "Gitee 未返回发行版 id，响应：$($rel | ConvertTo-Json -Compress)" }
 
-          $assetName = Split-Path $env:ASSET -Leaf
-          if ($rel.assets.name -contains $assetName) {
-            Write-Host "Gitee 发行版已有 $assetName，跳过上传"
+          # exe 与 .sha256 两个附件，缺哪个补哪个（重跑幂等的另一半）
+          $missing = @($env:ASSET, $env:ASSET_SHA) | Where-Object {
+            $rel.assets.name -notcontains (Split-Path $_ -Leaf)
+          }
+          if (-not $missing) {
+            Write-Host "Gitee 发行版附件已齐全，跳过上传"
             exit 0
           }
-
-          # 上传交给 curl.exe：multipart 的 boundary 与文件名编码由它按规范处理，
-          # 不用手搓。Gitee 单附件上限 100 MB，当前 exe 约 13 MB。
-          curl.exe -fsS -X POST "$api/$($rel.id)/attach_files" `
-            -F $auth -F "file=@$env:ASSET" | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "上传附件失败（curl 退出码 $LASTEXITCODE）" }
-          Write-Host "已把 $assetName 同步到 Gitee 发行版 $env:TAG"
+          foreach ($f in $missing) {
+            $n = Split-Path $f -Leaf
+            # 上传交给 curl.exe：multipart 的 boundary 与文件名编码由它按规范处理，
+            # 不用手搓。Gitee 单附件上限 100 MB，当前 exe 约 13 MB。
+            curl.exe -fsS -X POST "$api/$($rel.id)/attach_files" `
+              -F $auth -F "file=@$f" | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "上传 $n 失败（curl 退出码 $LASTEXITCODE）" }
+            Write-Host "已把 $n 传到 Gitee 发行版 $env:TAG"
+          }
