@@ -13,6 +13,7 @@ import (
 	"my-video-go/internal/state"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 	"github.com/wailsapp/wails/v3/pkg/events"
@@ -20,6 +21,9 @@ import (
 
 //go:embed all:frontend/dist
 var assets embed.FS
+
+//go:embed build/windows/icon.ico
+var trayIcon []byte
 
 // desktopURL 是桌面端窗口的起始地址。
 //
@@ -70,6 +74,11 @@ func main() {
 	// 单实例回调里要唤回窗口，而窗口在 Options 之后才创建，因此先声明。
 	var win *application.WebviewWindow
 
+	// quitting 标记"这次关闭是用户在主动退出"（托盘"退出"或系统注销）。
+	// 没有它，退出流程会先触发 WindowClosing → 被 shouldHideOnClose 拦成隐藏，
+	// 于是"退出"变成"藏起来"（见 tray.quit）。
+	var quitting atomic.Bool
+
 	wailsApp := application.New(application.Options{
 		Name:        "视频扫描器",
 		Description: "扫描本地视频文件夹并在局域网内共享播放",
@@ -92,13 +101,9 @@ func main() {
 		SingleInstance: &application.SingleInstanceOptions{
 			UniqueID: "com.ramen1024.video-scanner",
 			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
-				if win == nil {
-					return
-				}
-				// 最小化时 Show 不会还原，必须先 Restore
-				win.Restore()
-				win.Show()
-				win.Focus()
+				// 窗口可能正藏在托盘里（共享开着时关窗口只隐藏），
+				// 第二次双击就该把它叫回来，而不是再开一个实例。
+				showMainWindow(win)
 			},
 		},
 	})
@@ -132,6 +137,24 @@ func main() {
 			return
 		}
 		wailsApp.Event.Emit(eventFolderDropped, folder)
+	})
+
+	// 托盘从启动起就在：关窗口之后它是唯一的入口，不能等"隐藏那一刻"才出现
+	// （否则用户点完 X 会以为程序没了）。
+	trayCtl := newTray(wailsApp, win, trayIcon, &quitting)
+	appSvc.onShareChange = trayCtl.setSharing
+
+	// 关窗口的语义交给共享状态决定（见 shouldHideOnClose 的设计不变量）。
+	//
+	// 必须用 RegisterHook 而不是 OnWindowEvent：hook **同步**执行、能取消；
+	// listener 跑在各自的 goroutine 里，而框架自己的"关闭窗口"逻辑也是一个
+	// listener，靠取消标记在启动时自检——两者都注册成 listener 就成了竞态。
+	win.RegisterHook(events.Common.WindowClosing, func(e *application.WindowEvent) {
+		if !shouldHideOnClose(appSvc.isSharing(), quitting.Load()) {
+			return
+		}
+		e.Cancel()
+		win.Hide()
 	})
 
 	if err := wailsApp.Run(); err != nil {

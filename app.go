@@ -40,6 +40,9 @@ type App struct {
 	share    *share.Server
 	player   *player.Server
 	settings *settings.Store
+	// onShareChange 在共享状态变化时回调（托盘菜单据此更新状态项与 tooltip）。
+	// 由 main.go 注入；测试里为 nil，notifyShare 必须容忍。
+	onShareChange func(*models.ShareServerInfo)
 }
 
 func NewApp(st *state.AppState, pw *password.Manager, shareServer *share.Server, store *settings.Store) *App {
@@ -212,6 +215,7 @@ func (a *App) StartShareServer(folderPath string, port int) (models.ShareServerI
 		return models.ShareServerInfo{}, apperr.Other("%v", err)
 	}
 	a.st.SetServerRunningWithInfo(info)
+	a.notifyShare(info)
 	return *info, nil
 }
 
@@ -225,6 +229,8 @@ func (a *App) StopShareServer() error {
 	if err := a.share.Stop(); err != nil {
 		slog.Error("停止共享服务器出错", "err", err)
 		a.st.SetServerStopped()
+		// 状态机已经落到 Stopped：不管 Stop 是否报错，托盘都不该再显示"共享中"
+		a.notifyShare(nil)
 		return apperr.Other("等待服务器线程退出失败: %v", err)
 	}
 	a.st.SetServerStopped()
@@ -234,6 +240,22 @@ func (a *App) StopShareServer() error {
 // GetShareStatus 返回共享状态；webview 重载后前端据此恢复界面。
 func (a *App) GetShareStatus() models.ShareStatus {
 	return a.st.ShareStatus()
+}
+
+// isSharing 报告共享服务器是否正在运行。
+//
+// 关窗口的语义据此决定（开着共享就隐藏到托盘，没开就退出）——见
+// shouldHideOnClose 的设计不变量。
+func (a *App) isSharing() bool {
+	return a.st.ShareStatus().Running
+}
+
+// notifyShare 把最新的共享信息推给托盘；info 为 nil 表示已停止。
+// onShareChange 未注入时（测试）是无人可见的空操作。
+func (a *App) notifyShare(info *models.ShareServerInfo) {
+	if a.onShareChange != nil {
+		a.onShareChange(info)
+	}
 }
 
 // ---- 访问密码 ----

@@ -265,6 +265,25 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
     为单位扫描——替用户扫它所在的目录，等于把桌面上的一个电影文件变成扫描整个桌面
     （上万条目、几十秒读盘）。类型过滤在 Go 侧（`resolveDroppedFolder`）：前端拿到的
     只是路径字符串，判定"是不是目录"要问文件系统。
+- **关窗口的语义由共享状态决定**（`tray.go` 的 `shouldHideOnClose`），不变量是
+  **"关窗口不改变共享状态"**：共享开着 → 隐藏到托盘、共享继续；共享没开 → 正常退出。
+  这条比"永远隐藏"或"永远退出"都干净，也顺手解决了"进程占着端口却没人知道"——
+  托盘图标**从启动起就在**（不是隐藏那一刻才冒出来），tooltip 还写着"共享中"。
+  - **必须用 `win.RegisterHook(WindowClosing, …)` 而不是 `OnWindowEvent`**：hook
+    在 `HandleWindowEvent` 里**同步**执行且能被 `e.Cancel()` 中断；`OnWindowEvent`
+    注册的是 listener，跑在各自的 goroutine 里（`go func(){...}`），而框架自己
+    "关闭窗口"的逻辑也是一个 listener——两者都当 listener 就是竞态，取消标记来不及
+    生效。官方 `examples/systray-basic` 用的正是 hook + `e.Cancel()` + `Hide()`。
+  - 托盘"退出"必须先置 `quitting` 再 `app.Quit()`：否则退出流程会先触发
+    WindowClosing，被上面那条规则拦成"隐藏"，于是**退出变成藏起来**。
+  - 托盘图标传**改过的 ICO 字节**（`//go:embed build/windows/icon.ico`）：Windows 侧
+    `w32.iconResourceData` 会按 `SM_CXSMICON` 从多尺寸 ICO 里挑最合适的一张；
+    传 PNG 则是原图直接当图标、由系统缩到 16px，糊。这也顺带给
+    `build/appicon.png` 之前"没人用"的疑问一个答案——托盘用 ico，不用它。
+  - 菜单**刻意不放"停止共享"**：共享只有一个控制入口（窗口里的按钮）。加进托盘就要
+    再补一套"窗口状态与托盘不一致"的同步（事件通道 + 前端订阅），而成本换来的只是
+    少点一下。状态项是只读的（"共享中：http://IP:端口"），未共享时整项隐藏而不是
+    显示"未共享"——一行永远为真的灰字没有信息量。
 - **这三处看着像"框架已经能替我们做，可以删"，但都不能删**（都核过 v3 源码）：
   - `internal/player` 的回环 HTTP 服务器 + `GetVideoServerPort` + `videoSrc` 的
     127.0.0.1 分支 + CSP 的 `media-src http://127.0.0.1:*` 例外。v3 的 Windows
