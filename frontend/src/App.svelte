@@ -660,7 +660,17 @@
         {/if}
       </div>
     {:else}
-      <VideoTable {videos} onPlay={playVideo} preferInlinePlayback={platform.preferInlinePlayback} />
+      <!--
+        folderPath 只给桌面端：它用于悬停详情里拼"完整路径"，而网页端拿不到
+        共享方电脑的绝对路径（服务端不下发，见 models.VideoFile 的说明），
+        传空串让那一侧保持原样（只显示完整文件名）。
+      -->
+      <VideoTable
+        {videos}
+        onPlay={playVideo}
+        preferInlinePlayback={platform.preferInlinePlayback}
+        folderPath={isDesktop ? currentFolder : ""}
+      />
     {/if}
   </div>
 

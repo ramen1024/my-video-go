@@ -376,7 +376,10 @@ Vite 构建产物（`frontend/dist`，经 `go:embed` 打进二进制）：
   并发时返回"扫描正在进行中，请稍后"）；取消后**不写入**列表并返回 ScanCancelled
 - `/videos` 响应不含绝对路径（模型里就没有 path 字段）；桌面端 `PlayVideo` 也只收
   relativePath，绝对路径解析在服务端完成（`share.ResolveVideoPath`，跟随符号链接但
-  不得逃逸共享目录）
+  不得逃逸共享目录）。悬停提示里的"完整路径"由前端用 `currentFolder` +
+  `relative_path` 拼（`VideoTable` 的 `joinPath`），**不要**为了这一处提示给
+  `models.VideoFile` 加 path 字段——那会把共享方电脑的目录结构整体发给网页端，
+  与 README 的隐私承诺直接冲突
 - **Go 侧返回给前端的切片绝不能是 nil**：nil 经 JSON 序列化是 `null`，前端对响应
   直接 `.map` 会抛 TypeError。`state.SetScanResult` 已把 nil 归一化为空切片，
   `SetFolderPath` 单独调用时也给出空切片（否则快照里的列表会是 nil），`/videos`

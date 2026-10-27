@@ -17,9 +17,17 @@
     onPlay: (video: VideoItem) => void;
     /** 该条目是否应优先用内置播放器（否则按钮语义为"用系统播放器打开"） */
     preferInlinePlayback: (video: VideoItem) => boolean;
+    /**
+     * 当前扫描目录的**绝对路径**（仅桌面端有值）
+     *
+     * 只为悬停详情服务：拼出文件的完整路径。网页端恒为空串——服务端从不下发
+     * 共享方电脑的绝对路径（`VideoFile` 里没有 path 字段，README 的隐私承诺），
+     * 因此那一侧的悬停保持原样（只显示完整文件名）。
+     */
+    folderPath?: string;
   }
 
-  let { videos, onPlay, preferInlinePlayback }: Props = $props();
+  let { videos, onPlay, preferInlinePlayback, folderPath = "" }: Props = $props();
 
   let sortField = $state<SortField>("name");
   let sortDirection = $state<SortDirection>("asc");
@@ -176,6 +184,37 @@
   }
 
   /**
+   * 悬停详情（原生 title 的多行文本，仅桌面端）
+   *
+   * 列表里能看到的只有截断后的文件名、大小、日期，而"这个文件到底在哪"是浏览
+   * 视频库时最常被问到的一件事（去资源管理器里找、确认是不是同一个片源）。
+   *
+   * 用原生 title 而不是自绘浮层：它不受虚拟滚动的定位影响、不会挡住相邻行、
+   * 读屏器也能读，代价只剩系统默认的那点延迟。多行用 `\n`（Chromium 系支持）。
+   *
+   * 只在 `folderPath` 非空时被调用：网页端拿不到绝对路径，调用方会退回
+   * `video.name`（见模板里的三元）。
+   */
+  function hoverDetail(video: VideoItem): string {
+    const parts = [`大小：${formatFileSize(video.size)}`];
+    if (video.modified) parts.push(`修改时间：${video.modified}`);
+    parts.push(`格式：${video.extension.toUpperCase()}`);
+    return `完整路径：${joinPath(folderPath, video.relativePath)}\n${parts.join(" · ")}`;
+  }
+
+  /**
+   * 拼接目录与相对路径
+   *
+   * 不用 path 相关的库：那是 POSIX 语义，会把 Windows 路径里的反斜杠当普通
+   * 字符。这里只需要"去掉目录末尾已有的分隔符，再补一个"——用户从选择框拿到
+   * 的目录通常不带尾分隔符，但拖入的路径可能带。
+   */
+  function joinPath(folder: string, relativePath: string): string {
+    const sep = folder.includes("\\") ? "\\" : "/";
+    return `${folder.replace(/[\\/]+$/, "")}${sep}${relativePath}`;
+  }
+
+  /**
    * 手机上用的排序：点一次换字段，再点一次换方向
    *
    * 表头在窄屏被隐藏（四列并排会把文件名压成两三个字），若不补这个入口，
@@ -281,8 +320,12 @@
               焦点在行内时也能触发播放。
             -->
             <div class="table-row" role="row" tabindex="0" style="height: {row.size}px; transform: translateY({row.start}px);" onclick={() => onPlay(video)} onkeydown={(e) => handleRowKeydown(e, video)}>
-              <!-- title 给完整文件名：显示名既已剥掉扩展名、又会被截断，悬停是唯一能看到全文的地方 -->
-              <div class="col-name" role="cell" title={video.name}>
+              <!--
+                title：桌面端（folderPath 有值）给完整路径 + 元数据——显示名既已剥掉
+                扩展名、又会被截断，悬停是唯一能看到全文与位置的地方；网页端没有
+                绝对路径可给，保持原来"完整文件名"这一个用处。
+              -->
+              <div class="col-name" role="cell" title={folderPath ? hoverDetail(video) : video.name}>
                 <span class="video-name">{displayName(video.name, video.extension)}</span>
                 <!-- 名字里的点已随扩展名一起剥掉，徽章不再重复前导点 -->
                 <span class="video-ext">{video.extension}</span>
