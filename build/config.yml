@@ -17,7 +17,7 @@ info:
   description: "扫描本地视频文件夹并在局域网内共享播放"
   copyright: "Copyright © 2026"
   comments: "扫描本地视频文件夹并在局域网内共享播放"
-  version: "0.5.1"
+  version: "0.6.0"
 
 # 开发模式：wails3 dev -config ./build/config.yml
 #
