@@ -139,10 +139,16 @@ jobs:
           $api = "https://gitee.com/api/v5/repos/$env:GITEE_OWNER/$env:GITEE_REPO/releases"
           $auth = "access_token=$env:GITEE_TOKEN"
 
+          $rel = $null
           try {
             $rel = Invoke-RestMethod -Uri "$api/tags/$($env:TAG)?$auth" -Method Get
+          } catch { }
+          # **不能靠异常区分"已存在/不存在"**：Gitee 对"tag 存在但没有发行版"返回
+          # 200 + null（不是 404，v0.6.0 实测），所以必须显式判空再走创建分支
+          if ($rel -and $rel.id) {
             Write-Host "Gitee 发行版已存在（id=$($rel.id)），复用"
-          } catch {
+          } else {
+            $rel = $null
             $notes = gh release view $env:TAG --json body -q .body
             # 原生命令失败不会触发 ErrorActionPreference，必须自己看退出码
             if ($LASTEXITCODE -ne 0) { throw "读 GitHub Release 正文失败（gh 退出码 $LASTEXITCODE）" }
