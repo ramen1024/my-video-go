@@ -4,7 +4,8 @@
 局域网共享，让手机 / 平板 / 电视扫二维码观看。
 
 - **免安装**：下载一个 exe，双击即可运行
-- **不上传任何数据**：扫描、播放、共享全部只发生在你的电脑和局域网内，不连接任何外部服务器
+- **不上传任何数据**：扫描、播放、共享全部只发生在你的电脑和局域网内，
+  不向任何外部服务器发送数据
 - 界面为深色主题，上万条视频依然流畅
 
 ![桌面端主界面：视频列表与工具栏](docs/screenshot-desktop.png)
@@ -17,22 +18,23 @@
 |:---:|:---:|
 | ![网页端播放《Big Buck Bunny》：应用内直接播放，可拖动进度条](docs/screenshot-player.jpg) | ![登录页：4 位数字键盘](docs/screenshot-login.png) |
 
-> 截图中的视频为公开示例素材：Flower 与 Sintel 来自 MDN 的 CC 授权示例
-> （Sintel 为 Blender 开放电影），Forest 空镜为 samplelib.com 的演示片段。
-> 共享地址为示例值，与真实网络环境无关。
+> 截图中的视频为公开示例素材：Flower 与 Sintel 来自 MDN 的 CC 授权示例，
+> Sintel 与《Big Buck Bunny》为 Blender 开放电影，Forest 空镜为 samplelib.com
+> 的演示片段。共享地址为示例值，与真实网络环境无关。
 
 ## 下载
 
 **系统要求：Windows 10 / 11（64 位）。**
 
-1. 打开 [Releases 页面](https://github.com/ramen1024/my-video-go/releases)；
+1. 打开**当前这个仓库**的 Releases 页面（Gitee 上叫「发行版」）；
 2. 下载最新版本中的 `video-scanner-*-windows-amd64.exe`；
 3. 双击运行即可，无需安装。
 
-> **国内打不开 GitHub 时**，改用 Gitee 镜像：
-> [gitee.com/my_little_world/my-video-go](https://gitee.com/my_little_world/my-video-go/releases/latest)。
-> exe 与 GitHub 是同一份构建产物（发版时自动传到 Gitee），代码由 Gitee 自动同步、
-> 可能晚几分钟。Gitee 侧是只读镜像：Issue / 反馈请到 GitHub 仓库提。
+> **GitHub 与 Gitee 各有一份发行版，文件完全相同**：exe 是同一份构建产物（发版时
+> 自动传到 Gitee），代码由 Gitee 自动镜像。你在哪个站点看到这份说明，就用那个站点
+> 的发行版——两边一模一样，不需要跨站下载。
+> Gitee 侧是只读镜像（`https://gitee.com/my_little_world/my-video-go`），
+> Issue / 反馈请到 GitHub 仓库提。
 
 版本之间的变化见 [更新日志](CHANGELOG.md)。
 
@@ -47,10 +49,10 @@
 
 ## 快速上手
 
-1. **双击打开**程序，点击左上角**「选择文件夹」**（也可以直接把文件夹**拖进窗口**），
+1. **双击打开**程序，点击右上角**「选择文件夹」**（也可以直接把文件夹**拖进窗口**），
    选中你存放视频的文件夹——会连同子文件夹一起扫描，扫描过程中会显示已检查多少个
    文件，也可以随时取消；
-2. 扫描完成后，视频以列表显示，可以按文件名 / 大小 / 修改时间**排序**，也可以**搜索**。
+2. 扫描完成后，视频以列表显示，可以按文件名 / 大小 / 修改日期**排序**，也可以**搜索**。
    文件有增删后，点一下顶部的**「重新扫描」**就会重新扫描；
    - 选过一次之后，下次打开会自动回到这个文件夹并重新扫描，不需要再选一遍
 3. **双击列表中的视频即可播放**：MP4 / M4V / MKV / WebM / MOV 通常在应用内直接播放，
@@ -69,7 +71,8 @@
      不影响正在进行的共享）。要真正退出：右键托盘图标点「退出」。Win11 默认把
      新图标折叠在任务栏的 `^` 里，没看见就点一下它；
 5. **（可选）设置访问密码**：开启共享后，界面下方会出现「访问密码」面板。
-   设置一个 4 位数字密码，手机访问就需要先输密码（可一键随机生成、自动复制）；
+   设置一个 4 位数字密码，手机访问就需要先输密码（可一键随机生成，生成后旁边有
+   「复制」按钮）；
    不想用密码时在这里关闭即可。
 
 ## 支持的视频格式
@@ -85,19 +88,22 @@
 
 ## 隐私与安全
 
-- **不上传任何数据**：程序不连接任何外部服务器，扫描结果、播放记录都只在你本机
-  （唯一被记下来的是**上次扫描的文件夹**，存在 `%AppData%\video-scanner-go` 里，
-  同样只在本机使用，用来在下次打开时自动恢复列表）
+- **不上传任何数据**：程序不向任何服务器发送数据，扫描结果、播放记录都只在你本机。
+  本机只写三个文件，都在 `%AppData%\video-scanner-go`：`settings.json`（上次扫描的
+  文件夹，用来在下次打开时自动恢复列表）、`password_config.json`（密码的哈希材料，
+  首次启动就会生成）、`video-scanner.log`（出错时的日志，超过 1 MiB 轮转一次）
 - 共享是**只读**的：手机只能看列表和播放视频，不能上传、删除、改名；
   共享目录里的非视频文件也无法被访问或下载
 - 手机端看不到文件的完整路径，只能看到文件名
-- 访问密码经加密后保存在本机（`%AppData%\video-scanner-go`）；局域网登录每
-  30 秒最多尝试 3 次，输错会短暂锁定，无法穷举
+- 访问密码以 **Argon2id 哈希**（不可逆，程序自己也读不回明文）保存在
+  `%AppData%\video-scanner-go`；局域网登录同一 IP 每 30 秒最多尝试 3 次，输错会
+  短暂锁定——4 位密码只有 1 万种，限流把尝试速度压到约每小时 360 次
 - 局域网共享是明文 HTTP，适合家庭网络使用；请不要在公共 WiFi 下开启共享
-- **已知取舍**：桌面端在应用内播放时，会用本机回环地址（`127.0.0.1` 上的随机端口）
-  的临时小服务器把视频喂给播放器。该服务器**不校验访问密码**，因此同一台电脑上
-  的其他程序或用户会话可以绕过密码读到正在共享的视频。它只监听回环地址，
-  局域网里的其他设备连不上；不想有这个面时，关掉「局域网共享」即可
+- **已知取舍**：桌面端为了能拖进度条、又不把整个视频读进内存，从**程序启动起**就在
+  本机回环地址（`127.0.0.1` 的随机端口）上跑一个小服务器，把视频流喂给播放器。
+  它**不校验访问密码**，所以只要程序还在运行（开不开共享都一样），同一台电脑上
+  的其他程序或用户会话就能绕过密码读取列表里的视频。它只监听回环地址，局域网里的
+  其他设备连不上；想消掉这个面只能退出程序——关掉「局域网共享」不会停掉它
 
 ## 常见问题
 
@@ -125,8 +131,9 @@
 <details>
 <summary><b>构建与开发</b>（点开）</summary>
 
-依赖：Go 1.27+、Node 22+、pnpm 11、[Wails v3 CLI](https://v3.wails.io)、WebView2 运行时
-（Windows 11 自带）。Go 版本以 `go.mod` 为准。
+依赖：Go 1.27.2+、Node 22+、pnpm 11、[Wails v3 CLI](https://v3.wails.io)、WebView2 运行时
+（Windows 11 自带，构建不需要、运行需要）。Go 版本以 `go.mod` 为准——`go` 指令带补丁号，
+1.27.0 / 1.27.1 会直接拒绝构建。
 
 ```bash
 # 安装 Wails v3 CLI（钉在与 go.mod/CI 相同的 v3.0.0，避免 CLI 与库版本错配）
@@ -139,15 +146,20 @@ wails3 dev
 wails3 build
 
 # 只构建前端（改样式 / 组件后想让网页端生效时）
-cd frontend && pnpm install && pnpm build
+pnpm -C frontend install && pnpm -C frontend build
 
-# 质量检查
-cd frontend && pnpm check        # svelte-check + 跨文件一致性断言
-go vet ./... && go test ./...    # 后端测试（含 HTTP 契约测试）
+# 质量检查（与 CI 同款，少跑一项就可能"本地全绿、CI 红灯"）
+pnpm -C frontend check           # svelte-check + 跨文件一致性断言
+gofmt -l .                       # 必须无输出
+go vet ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+go test -race ./...              # -race 需要 CGO/gcc（CI 的 windows-latest 自带 MinGW）
 ```
 
 `wails3 build` 产出 `build/bin/视频扫描器.exe`，可执行文件即绿色版，无需安装。
-构建流程写在 `Taskfile.yml`（v3 用 Taskfile 取代了 v2 的 `wails.json`）。
+构建任务是 `Taskfile.yml` 里的 task（v3 用 Taskfile 做编排）；v2 的 `wails.json` 在 v3
+里换成了 `build/config.yml`（产品名、版本号等元数据在那里，exe 的版本资源仍由
+`build/windows/info.json` 决定）。
 
 </details>
 

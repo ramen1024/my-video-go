@@ -48,6 +48,11 @@ Gitee 来拉，分支/标签/提交自动跟。仓库里**不要**再加 push-to
   比对**三处**——`release.yml`(step env)、`README.md` 下载节、`App.svelte` 的
   `MIRROR_URL`，改仓库要同时动这三处，漏一处就红灯（漂移的症状是 exe 传到 A 仓库、
   文档指向 B 仓库，用户 404 而 CI 全绿）
+- **README 的下载节不放任一方的绝对链接**：README 在 GitHub 与 Gitee 是同一份文件，
+  写死 `github.com` 的发行版地址，Gitee 上的读者点开就跳去 GitHub（而那边通常正是
+  打不开的那一侧）；只写 Gitee 地址，GitHub 读者同样被送走。所以只写"用你所在站点的
+  Releases / 发行版"。Gitee 仓库路径仍以**行内代码**留在那一节里——三处比对靠它，
+  删掉会红灯；也**不要**改回可点链接（Gitee 上点自己是无意义的跳转）
 - 密钥是 secret `GITEE_TOKEN`（Gitee 私人令牌，勾 `projects`），只在发版时传附件用。
   令牌是**账号级**的，没法只授权单个仓库——泄露等于整个 Gitee 账号的写权限，要立刻
   吊销
